@@ -126,15 +126,6 @@ end
 
 -- ── 선택 화면 ────────────────────────────────────────────
 
---- 테이블(맵)의 항목 개수를 센다. factions 처럼 키가 문자열인 맵용.
--- @param t table
--- @return number
-local function countKeys(t)
-  local n = 0
-  for _ in pairs(t) do n = n + 1 end
-  return n
-end
-
 --- 시나리오 버튼 목록을 화면 크기에 맞춰 만든다. (draw·입력에서 같은 레이아웃 공유)
 -- @return table  UI 버튼 배열(value = 시나리오 인덱스)
 local function buildScenarioButtons()
@@ -146,7 +137,7 @@ local function buildScenarioButtons()
   local y0 = h / 2 - totalH / 2 + 30 -- 제목 아래로 약간 내림
   local btns = {}
   for i, sc in ipairs(game_data.scenarios) do
-    local label = string.format("%s  (%d년) · %d세력", sc.name, sc.year, countKeys(sc.factions))
+    local label = string.format("%s  (%d년)", sc.name, sc.year)
     btns[i] = UI.newButton(x, y0 + (i - 1) * (bh + gap), bw, bh, label, i)
   end
   return btns
