@@ -47,10 +47,10 @@ config.camera = {
 -- 지도 렌더 상수.
 config.map = {
   fontSize = 18,           -- 지역 이름 폰트 크기
-  mapMargin = 140,         -- 시드 외곽에서 보로노이 클립 경계까지 여백(월드 px)
-  borderWidth = 2,         -- 영토 경계선 두께
-  selectBorderWidth = 4,   -- 선택 영토 강조 경계선 두께
-  fillAlpha = 0.85,        -- 영토 채움 불투명도(경계가 또렷이 보이게 약간 투과)
+  hexSize = 64,            -- 헥스 반경(중심→꼭짓점, 월드 px)
+  borderWidth = 2,         -- 헥스 경계선 두께(=인접)
+  selectBorderWidth = 4,   -- 선택 헥스 강조 경계선 두께
+  fillAlpha = 0.9,         -- 헥스 채움 불투명도
 }
 
 return config

@@ -1,24 +1,26 @@
 --[[
-region.lua — 지역 조회 / 인접 판정 / 클릭 판정 (순수 Lua, love 비의존)
+region.lua — 지역 조회 / 헥스 인접 / 클릭 판정 (순수 Lua, love 비의존)
 
   이 모듈의 책임:
-    - 지역 목록(game_data.regions)을 받아 id 조회, 인접 여부, 인접쌍 목록,
-      좌표 클릭(점-원 포함) 판정을 제공한다.
+    - 지역 목록(game_data.regions)을 받아 id 조회, 헥스 인접 판정,
+      클릭 픽셀이 속한 헥스(영토) 판정을 제공한다.
   관계:
-    - 데이터는 game_data.lua 가 소유한다. 이 모듈은 그 데이터를 "주입받아" 쓴다.
-    - 표현 계층(main.lua)이 인접선 렌더(connections)와 노드 클릭(hitTest)에 쓴다.
+    - 데이터는 game_data.lua 소유(각 지역 axial q,r). 이 모듈은 주입받아 쓴다.
+    - hex.lua 로 좌표 변환·인접을 계산한다.
+    - main.lua 가 cellAt 으로 클릭 영토를 고른다.
     - love.* 비의존 → project/tests/ 에서 순수 단위 테스트 가능.
 
-  주의: 내부 캐시를 두지 않고 매번 regions 인자를 받는 무상태 함수로 둔다.
-        (데이터 소유는 game_data, 규칙 변형은 추후 game_state 책임 — 계층 분리)
+  주의: 무상태 함수. 매번 regions 인자를 받는다. (데이터 소유는 game_data)
 --]]
+
+local Hex = require("hex")
 
 local Region = {}
 
 --- id 로 지역을 찾는다.
 -- @param regions table  지역 레코드 배열
--- @param id string      찾을 지역 id
--- @return table|nil     일치 지역, 없으면 nil
+-- @param id string
+-- @return table|nil
 function Region.byId(regions, id)
   for _, r in ipairs(regions) do
     if r.id == id then
@@ -28,100 +30,75 @@ function Region.byId(regions, id)
   return nil
 end
 
---- 두 지역이 인접한지 판정한다.
--- A 의 neighbors 목록에 B 가 있으면 인접으로 본다.
--- (데이터는 양방향 일관을 가정하지만, 한쪽만 확인해도 충분.)
+--- 같은 axial(q,r) 의 지역을 찾는다. (헥스→지역 역조회)
 -- @param regions table
--- @param idA string
--- @param idB string
+-- @param q,r number
+-- @return table|nil
+local function atAxial(regions, q, r)
+  for _, reg in ipairs(regions) do
+    if reg.q == q and reg.r == r then
+      return reg
+    end
+  end
+  return nil
+end
+
+--- 지역의 인접 지역 목록 (헥스 6이웃 중 실재하는 것).
+-- GDD 5장: 맞닿은 헥스 = 인접. 별도 neighbors 데이터 없이 좌표로 산출.
+-- @param regions table
+-- @param id string
+-- @return table  인접 지역 배열(0~6개)
+function Region.adjacent(regions, id)
+  local self = Region.byId(regions, id)
+  if not self then return {} end
+  local out = {}
+  for _, nb in ipairs(Hex.neighbors(self.q, self.r)) do
+    local reg = atAxial(regions, nb[1], nb[2])
+    if reg then out[#out + 1] = reg end
+  end
+  return out
+end
+
+--- 두 지역이 헥스 인접인지.
+-- @param regions table
+-- @param idA,idB string
 -- @return boolean
 function Region.areAdjacent(regions, idA, idB)
   local a = Region.byId(regions, idA)
-  if not a or not a.neighbors then
-    return false
-  end
-  for _, nid in ipairs(a.neighbors) do
-    if nid == idB then
+  local b = Region.byId(regions, idB)
+  if not a or not b then return false end
+  for _, nb in ipairs(Hex.neighbors(a.q, a.r)) do
+    if nb[1] == b.q and nb[2] == b.r then
       return true
     end
   end
   return false
 end
 
---- 중복 없는 인접쌍 목록을 만든다 (인접선을 한 변당 1회만 그리기 위함).
--- A-B 와 B-A 는 같은 변이므로, 양 끝 좌표를 한 번만 담는다.
+--- 월드 픽셀(wx,wy)이 속한 영토(헥스)를 고른다.
+-- 1) 픽셀 → 최근접 헥스 axial → 그 좌표의 지역.
+-- 2) 빈 헥스(지역 없음)면 중심이 가장 가까운 지역으로 폴백.
 -- @param regions table
--- @return table  { {x1,y1,x2,y2}, ... }  각 원소가 한 인접선
-function Region.connections(regions)
-  local seen = {}   -- "idA|idB" (정렬된 쌍) 중복 방지 집합
-  local lines = {}
+-- @param wx,wy number  월드 좌표(클릭 지점)
+-- @param size number   헥스 반경(config.map.hexSize)
+-- @return table|nil
+function Region.cellAt(regions, wx, wy, size)
+  local q, r = Hex.pixelToAxial(wx, wy, size)
+  local hit = atAxial(regions, q, r)
+  if hit then return hit end
 
-  for _, r in ipairs(regions) do
-    if r.neighbors then
-      for _, nid in ipairs(r.neighbors) do
-        local other = Region.byId(regions, nid)
-        if other then
-          -- id 두 개를 사전순 정렬해 키로 → A|B 와 B|A 가 같은 키
-          local key
-          if r.id < nid then
-            key = r.id .. "|" .. nid
-          else
-            key = nid .. "|" .. r.id
-          end
-          if not seen[key] then
-            seen[key] = true
-            lines[#lines + 1] = { r.x, r.y, other.x, other.y }
-          end
-        end
-      end
-    end
-  end
-  return lines
-end
-
---- 월드 좌표(wx,wy)가 속한 영토(보로노이 셀)를 고른다.
--- 보로노이 셀 정의 = "그 시드가 가장 가까운 점들의 영역" 이므로,
--- 클릭 지점에서 시드 거리가 최소인 지역이 곧 클릭된 영토다.
--- (다각형 점-포함 판정이 필요 없다 — 최근접 시드 = 정확한 셀 판정.)
--- 지도 전체가 영토로 덮이므로 항상 한 지역을 반환한다.
--- @param regions table
--- @param wx number  월드 X (클릭 지점)
--- @param wy number  월드 Y
--- @return table  가장 가까운 시드의 지역
-function Region.cellAt(regions, wx, wy)
+  -- 폴백: 헥스 중심까지 거리 최소 지역.
   local best, bestD = nil, nil
-  for _, r in ipairs(regions) do
-    local dx = wx - r.x
-    local dy = wy - r.y
-    local d = dx * dx + dy * dy -- 제곱거리(루트 불필요)
+  for _, reg in ipairs(regions) do
+    local cx, cy = Hex.axialToPixel(reg.q, reg.r, size)
+    local dx, dy = wx - cx, wy - cy
+    local d = dx * dx + dy * dy
     if not bestD or d < bestD then
       bestD = d
-      best = r
+      best = reg
     end
   end
   return best
-end
-
---- 월드 좌표(wx,wy)가 어떤 지역 노드(원) 안에 있는지 판정한다.
--- 점-원 포함 판정: 중심까지 거리 제곱이 반경 제곱 이하이면 안쪽.
--- (sqrt 안 쓰고 제곱끼리 비교 — 더 싸고 정확.)
--- 노드가 겹칠 경우 배열 뒤쪽(나중에 그린, 위에 보이는) 지역을 우선한다.
--- @param regions table
--- @param wx number  월드 X (클릭 지점)
--- @param wy number  월드 Y
--- @param radius number  노드 반경 (config.map.nodeRadius)
--- @return table|nil  맞은 지역, 없으면 nil
-function Region.hitTest(regions, wx, wy, radius)
-  local r2 = radius * radius
-  local hit = nil
-  for _, reg in ipairs(regions) do
-    local dx = wx - reg.x
-    local dy = wy - reg.y
-    if dx * dx + dy * dy <= r2 then
-      hit = reg -- 마지막으로 맞은 것이 최종 → 위에 그려진 노드 우선
-    end
-  end
-  return hit
 end
 
 return Region
