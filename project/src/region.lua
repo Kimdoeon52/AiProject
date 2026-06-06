@@ -79,6 +79,29 @@ function Region.connections(regions)
   return lines
 end
 
+--- 월드 좌표(wx,wy)가 속한 영토(보로노이 셀)를 고른다.
+-- 보로노이 셀 정의 = "그 시드가 가장 가까운 점들의 영역" 이므로,
+-- 클릭 지점에서 시드 거리가 최소인 지역이 곧 클릭된 영토다.
+-- (다각형 점-포함 판정이 필요 없다 — 최근접 시드 = 정확한 셀 판정.)
+-- 지도 전체가 영토로 덮이므로 항상 한 지역을 반환한다.
+-- @param regions table
+-- @param wx number  월드 X (클릭 지점)
+-- @param wy number  월드 Y
+-- @return table  가장 가까운 시드의 지역
+function Region.cellAt(regions, wx, wy)
+  local best, bestD = nil, nil
+  for _, r in ipairs(regions) do
+    local dx = wx - r.x
+    local dy = wy - r.y
+    local d = dx * dx + dy * dy -- 제곱거리(루트 불필요)
+    if not bestD or d < bestD then
+      bestD = d
+      best = r
+    end
+  end
+  return best
+end
+
 --- 월드 좌표(wx,wy)가 어떤 지역 노드(원) 안에 있는지 판정한다.
 -- 점-원 포함 판정: 중심까지 거리 제곱이 반경 제곱 이하이면 안쪽.
 -- (sqrt 안 쓰고 제곱끼리 비교 — 더 싸고 정확.)

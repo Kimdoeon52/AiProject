@@ -17,6 +17,7 @@ package.path = "project/src/?.lua;" .. package.path
 
 local Camera = require("camera")
 local Region = require("region")
+local Voronoi = require("voronoi")
 local game_data = require("game_data")
 
 local passed, failed = 0, 0
@@ -115,6 +116,34 @@ do
     if not validOwner[r.owner] then badOwner = badOwner + 1 end
   end
   check(badOwner == 0, "owner 값 유효")
+end
+
+-- ── voronoi (영토 분할) ──────────────────────────────────
+do
+  local regions = game_data.regions
+
+  -- cellAt: 시드 좌표를 찍으면 그 자신 영토가 선택되어야 한다.
+  --   (보로노이 셀 = 최근접 시드 영역이므로 시드 위치는 항상 자기 셀.)
+  local selfHitOk = true
+  for _, r in ipairs(regions) do
+    local c = Region.cellAt(regions, r.x, r.y)
+    if not c or c.id ~= r.id then selfHitOk = false end
+  end
+  check(selfHitOk, "cellAt 시드 위치는 자기 영토")
+
+  -- 셀 개수 = 지역 수, 각 셀은 볼록 다각형(>=3 정점 = 6값).
+  local bbox = Voronoi.boundsOf(regions, 140)
+  local cells = Voronoi.computeCells(regions, bbox)
+  check(#cells == #regions, "셀 개수 = 지역 수")
+
+  local allConvexEnough = true
+  for _, poly in ipairs(cells) do
+    if #poly < 6 then allConvexEnough = false end
+  end
+  check(allConvexEnough, "모든 셀 >=3 정점")
+
+  -- bbox 여백 적용: 시드 최소값보다 margin 만큼 더 바깥.
+  check(bbox.x0 < 360 and bbox.y0 < 140, "boundsOf 여백 적용")
 end
 
 -- ── 결과 ─────────────────────────────────────────────────
