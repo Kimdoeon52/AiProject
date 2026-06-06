@@ -30,7 +30,7 @@ game_data.regions = {
     neighbors = { "ye", "chenliu", "changan", "xuchang", "nanyang" } },
   { id = "changan",  name = "장안", x = 640, y = 360, owner = "wei",
     neighbors = { "luoyang", "anding", "hanzhong" } },
-  { id = "xuchang",  name = "허창", x = 900, y = 440, owner = "wei",
+  { id = "xuchang",  name = "허창", x = 915, y = 478, owner = "wei",
     neighbors = { "chenliu", "luoyang", "xiaopei", "nanyang" } },
   { id = "jinyang",  name = "진양", x = 860, y = 200, owner = "wei",
     neighbors = { "ye", "ji" } },
@@ -54,7 +54,7 @@ game_data.regions = {
     neighbors = { "tianshui", "anding" } },
   { id = "xiaopei",  name = "소패", x = 1010, y = 460, owner = "neutral",
     neighbors = { "xuchang", "xiapi" } },
-  { id = "xiapi",    name = "하비", x = 1080, y = 480, owner = "neutral",
+  { id = "xiapi",    name = "하비", x = 1085, y = 430, owner = "neutral",
     neighbors = { "xiaopei", "lujiang" } },
 
   -- ── 서부 (촉/유비 계열) ──────────────────────────────────
@@ -74,7 +74,7 @@ game_data.regions = {
   -- ── 형주·남방 (중립, 쟁탈지) ─────────────────────────────
   { id = "nanyang",  name = "완",   x = 820, y = 440, owner = "neutral",
     neighbors = { "xuchang", "luoyang", "xinye" } },
-  { id = "xinye",    name = "신야", x = 790, y = 490, owner = "neutral",
+  { id = "xinye",    name = "신야", x = 772, y = 502, owner = "neutral",
     neighbors = { "nanyang", "xiangyang" } },
   { id = "xiangyang",name = "양양", x = 830, y = 540, owner = "neutral",
     neighbors = { "xinye", "jiangling", "jiangxia" } },
