@@ -30,7 +30,7 @@ game_data.regions = {
     neighbors = { "ye", "chenliu", "changan", "xuchang", "nanyang" } },
   { id = "changan",  name = "장안", x = 640, y = 360, owner = "wei",
     neighbors = { "luoyang", "anding", "hanzhong" } },
-  { id = "xuchang",  name = "허창", x = 915, y = 478, owner = "wei",
+  { id = "xuchang",  name = "허창", x = 920, y = 505, owner = "wei",
     neighbors = { "chenliu", "luoyang", "xiaopei", "nanyang" } },
   { id = "jinyang",  name = "진양", x = 860, y = 200, owner = "wei",
     neighbors = { "ye", "ji" } },
@@ -54,7 +54,7 @@ game_data.regions = {
     neighbors = { "tianshui", "anding" } },
   { id = "xiaopei",  name = "소패", x = 1010, y = 460, owner = "neutral",
     neighbors = { "xuchang", "xiapi" } },
-  { id = "xiapi",    name = "하비", x = 1085, y = 430, owner = "neutral",
+  { id = "xiapi",    name = "하비", x = 1085, y = 395, owner = "neutral",
     neighbors = { "xiaopei", "lujiang" } },
 
   -- ── 서부 (촉/유비 계열) ──────────────────────────────────
