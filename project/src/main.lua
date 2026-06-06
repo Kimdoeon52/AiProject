@@ -130,6 +130,7 @@ end
 -- @return table  UI 버튼 배열(value = 시나리오 인덱스)
 local function buildScenarioButtons()
   local w, h = love.graphics.getDimensions()
+  -- 버튼 폭/높이/간격(px). 화면 가로 중앙 + 세로 가운데 정렬에 사용.
   local bw, bh, gap = 520, 76, 18
   local n = #game_data.scenarios
   local totalH = n * bh + (n - 1) * gap
@@ -143,22 +144,27 @@ local function buildScenarioButtons()
   return btns
 end
 
+--- 시나리오 선택 화면을 그린다. (읽기 전용)
+-- 제목 → 시나리오 버튼들(마우스 hover 강조) → 하단 안내.
+-- 부작용 없음(상태 변경은 입력 콜백에서). 버튼 레이아웃은 buildScenarioButtons 공유.
 local function drawSelect()
   local w = love.graphics.getWidth()
   love.graphics.clear(config.colors.background)
 
-  -- 제목
+  -- 제목 (큰 폰트). y=90 = 상단 여백.
   love.graphics.setFont(state.titleFont)
   love.graphics.setColor(config.colors.text)
   love.graphics.printf("삼국 패권 — 시나리오 선택", 0, 90, w, "center")
 
-  -- 버튼들 (마우스 위치로 hover 강조)
+  -- 버튼들. 커서가 버튼 위면(UI.hit) hover 강조로 그린다.
   love.graphics.setFont(state.font)
+  -- love.mouse.getPosition(): 현재 커서 스크린 좌표. hover 판정용.
   local mx, my = love.mouse.getPosition()
   for _, btn in ipairs(buildScenarioButtons()) do
     UI.draw(btn, { hovered = UI.hit(btn, mx, my), accent = config.colors.selectBorder })
   end
 
+  -- 하단 안내. 화면 바닥에서 60px 위.
   love.graphics.setColor(config.colors.text)
   love.graphics.printf("시나리오를 클릭해 시작", 0, love.graphics.getHeight() - 60, w, "center")
 end
@@ -198,12 +204,13 @@ local function drawHexMap()
   end
 end
 
---- 좌상단 세력 범례(시나리오 세력 색·이름).
+--- 좌상단 세력 범례(시나리오 세력 색 견본 + 이름)를 그린다.
+-- @side 부작용 없음(읽기 전용).
 local function drawLegend()
   local sc = state.scenario
   if not sc then return end
-  local x, y = 16, 44
-  local sw = 16 -- 색 견본 한 변
+  local x, y = 16, 44 -- 시작 좌표(좌상단 여백 16, 헤더 텍스트 아래 44)
+  local sw = 16       -- 색 견본 정사각 한 변(px)
   -- factions 를 이름 정렬 없이 순회(테이블 순서). 한 줄씩.
   for _, f in pairs(sc.factions) do
     love.graphics.setColor(f.color)
@@ -214,6 +221,9 @@ local function drawLegend()
   end
 end
 
+--- 지도 화면을 그린다. (읽기 전용)
+-- 카메라 변환(scale→translate) 안에서 헥스 지도 → 변환 밖에서 화면 고정 오버레이
+-- (시나리오/선택 정보 + 세력 범례).
 local function drawMap()
   love.graphics.clear(config.colors.background)
   local cam = state.cam
@@ -237,7 +247,9 @@ end
 
 -- ── draw 디스패치 ────────────────────────────────────────
 
+--- 매 프레임 화면을 그린다. 현재 scene 에 따라 선택/지도 화면으로 분기. (읽기 전용)
 function love.draw()
+  -- love.graphics.setFont(font): 이후 텍스트 기본 폰트 지정.
   love.graphics.setFont(state.font)
   if state.scene == "select" then
     drawSelect()
