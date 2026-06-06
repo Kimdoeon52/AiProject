@@ -84,8 +84,9 @@ do
   for _, r in ipairs(adj) do if r.id == "hongnong" then hasHongnong = true end end
   check(hasHongnong, "adjacent 낙양 포함 홍농")
 
-  -- cellAt: 낙양 중심 픽셀 클릭 → 낙양.
-  local px, py = Hex.axialToPixel(0, 2, size)
+  -- cellAt: 낙양 중심 픽셀 클릭 → 낙양. (좌표는 데이터에서 읽어 q,r 변경에 견고)
+  local ly = Region.byId(regions, "luoyang")
+  local px, py = Hex.axialToPixel(ly.q, ly.r, size)
   local hit = Region.cellAt(regions, px, py, size)
   check(hit and hit.id == "luoyang", "cellAt 중심 명중")
 end

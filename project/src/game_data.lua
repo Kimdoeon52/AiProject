@@ -27,47 +27,49 @@ local game_data = {}
 
 -- 30 거점. 행(r) = 북→남. 같은 행 안에서 q 증가 = 서→동(벌집 전단 반영).
 game_data.regions = {
-  -- ── r0: 최북단 (서→동) ───────────────────────────────────
-  { id = "wuwei",    name = "무위", q = 0, r = 0, owner = "neutral" }, -- 양주 서북
-  { id = "jinyang",  name = "진양", q = 1, r = 0, owner = "wei" },
-  { id = "pingyuan", name = "평원", q = 2, r = 0, owner = "wei" },
-  { id = "bohai",    name = "발해", q = 3, r = 0, owner = "wei" },
-  { id = "beiping",  name = "북평", q = 4, r = 0, owner = "wei" },     -- 동북 끝
+  -- ── r0: 북단 — 유주/병주 북부 (서→동) ────────────────────
+  { id = "jinyang",  name = "진양", q = 1, r = 0, owner = "wei" },     -- 병주(태원)
+  { id = "bohai",    name = "발해", q = 2, r = 0, owner = "wei" },
+  { id = "beiping",  name = "북평", q = 3, r = 0, owner = "wei" },     -- 동북 끝(유주)
 
-  -- ── r1: 관중~하북 (서→동) ────────────────────────────────
-  { id = "tianshui", name = "천수", q = 0, r = 1, owner = "neutral" },
-  { id = "changan",  name = "장안", q = 1, r = 1, owner = "wei" },
-  { id = "ye",       name = "업",   q = 2, r = 1, owner = "wei" },
-  { id = "puyang",   name = "복양", q = 3, r = 1, owner = "wei" },
-  { id = "xiapi",    name = "하비", q = 4, r = 1, owner = "neutral" },
-  { id = "pengcheng",name = "팽성", q = 5, r = 1, owner = "neutral" },
+  -- ── r1: 하북·기주 (서→동). 무위=서북 변 시작점 ───────────
+  { id = "wuwei",    name = "무위", q = 0, r = 1, owner = "neutral" }, -- 양주 서북(西部 arm)
+  { id = "ye",       name = "업",   q = 1, r = 1, owner = "wei" },     -- 기주
+  { id = "pingyuan", name = "평원", q = 2, r = 1, owner = "wei" },     -- 청주
+  { id = "puyang",   name = "복양", q = 3, r = 1, owner = "wei" },     -- 연주 북
+  { id = "xiapi",    name = "하비", q = 4, r = 1, owner = "neutral" }, -- 서주 동
 
-  -- ── r2: 중원 (서→동) ─────────────────────────────────────
-  { id = "hanzhong", name = "한중", q = -1, r = 2, owner = "shu" },
-  { id = "luoyang",  name = "낙양", q = 0, r = 2, owner = "wei" },
+  -- ── r2: 중원 가로 띠 (서→동). 폭 7칸 ─────────────────────
+  { id = "tianshui", name = "천수", q = -1, r = 2, owner = "neutral" },-- 양주 서(arm)
+  { id = "changan",  name = "장안", q = 0, r = 2, owner = "wei" },     -- 사예 서
   { id = "hongnong", name = "홍농", q = 1, r = 2, owner = "wei" },
-  { id = "chenliu",  name = "진류", q = 2, r = 2, owner = "wei" },
-  { id = "xuchang",  name = "허창", q = 3, r = 2, owner = "wei" },
-  { id = "guangling",name = "광릉", q = 4, r = 2, owner = "neutral" }, -- 동남 해안
+  { id = "luoyang",  name = "낙양", q = 2, r = 2, owner = "wei" },     -- 사예
+  { id = "chenliu",  name = "진류", q = 3, r = 2, owner = "wei" },     -- 연주
+  { id = "xuchang",  name = "허창", q = 4, r = 2, owner = "wei" },     -- 예주
+  { id = "pengcheng",name = "팽성", q = 5, r = 2, owner = "neutral" }, -- 서주
 
-  -- ── r3: 형주 북~강동 (서→동) ─────────────────────────────
-  { id = "chengdu",  name = "성도", q = -1, r = 3, owner = "shu" },
-  { id = "runan",    name = "여남", q = 0, r = 3, owner = "wei" },
-  { id = "xinye",    name = "신야", q = 1, r = 3, owner = "neutral" },
-  { id = "xiangyang",name = "양양", q = 2, r = 3, owner = "neutral" },
-  { id = "jianye",   name = "건업", q = 3, r = 3, owner = "wu" },
-  { id = "wujun",    name = "오군", q = 4, r = 3, owner = "wu" },
+  -- ── r3: 형북·예남·강동 북 (서→동) ────────────────────────
+  { id = "hanzhong", name = "한중", q = -1, r = 3, owner = "shu" },    -- 익주 북(arm)
+  { id = "xinye",    name = "신야", q = 0, r = 3, owner = "neutral" }, -- 형주 북
+  { id = "xiangyang",name = "양양", q = 1, r = 3, owner = "neutral" },
+  { id = "runan",    name = "여남", q = 2, r = 3, owner = "wei" },     -- 예주 남
+  { id = "jianye",   name = "건업", q = 3, r = 3, owner = "wu" },      -- 강동
+  { id = "guangling",name = "광릉", q = 4, r = 3, owner = "neutral" }, -- 강도(동남 돌출)
 
-  -- ── r4: 익주 남~강동 남 (서→동) ──────────────────────────
-  { id = "jiangzhou",name = "강주", q = -2, r = 4, owner = "shu" },
-  { id = "jiangling",name = "강릉", q = -1, r = 4, owner = "neutral" },
-  { id = "wuling",   name = "무릉", q = 0, r = 4, owner = "neutral" },
-  { id = "chaisang", name = "시상", q = 1, r = 4, owner = "wu" },
-  { id = "kuaiji",   name = "회계", q = 2, r = 4, owner = "wu" },
+  -- ── r4: 익주·형중·강동 남 (서→동) ────────────────────────
+  { id = "chengdu",  name = "성도", q = -2, r = 4, owner = "shu" },    -- 익주(arm)
+  { id = "jiangling",name = "강릉", q = -1, r = 4, owner = "neutral" },-- 형주 중
+  { id = "chaisang", name = "시상", q = 0, r = 4, owner = "wu" },      -- 강하/구강
+  { id = "wujun",    name = "오군", q = 1, r = 4, owner = "wu" },
+  { id = "kuaiji",   name = "회계", q = 2, r = 4, owner = "wu" },      -- 동남 끝
 
-  -- ── r5: 최남단 ───────────────────────────────────────────
-  { id = "yunnan",   name = "운남", q = -1, r = 5, owner = "shu" },
-  { id = "changsha", name = "장사", q = 0, r = 5, owner = "neutral" },
+  -- ── r5: 형남·익동 (서→동) ────────────────────────────────
+  { id = "jiangzhou",name = "강주", q = -2, r = 5, owner = "shu" },    -- 익주 동(arm)
+  { id = "wuling",   name = "무릉", q = -1, r = 5, owner = "neutral" },-- 형주 서남
+  { id = "changsha", name = "장사", q = 0, r = 5, owner = "neutral" }, -- 형주 남
+
+  -- ── r6: 최남단 ───────────────────────────────────────────
+  { id = "yunnan",   name = "운남", q = -2, r = 6, owner = "shu" },    -- 익주 최남(arm 끝)
 }
 
 return game_data
