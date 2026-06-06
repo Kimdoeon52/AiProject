@@ -37,11 +37,16 @@ config.colors = {
   background = { 0.12, 0.13, 0.16 },       -- 지도 배경(영토 밖)
 }
 
--- 카메라 줌 한계/배율. main.lua wheelmoved 에서 사용.
+-- 카메라 줌 배율/한계. main.lua wheelmoved·load 에서 사용.
+--   줌아웃 바닥(minScale)은 화면 크기에 따라 동적 계산(전체 지도 fit) → 여기 고정 안 둠.
 config.camera = {
-  minScale = 0.4,  -- 최대 축소
-  maxScale = 3.0,  -- 최대 확대
-  zoomStep = 1.1,  -- 휠 1눈금당 배율 (1.1배씩)
+  zoomStep = 1.1,      -- 휠 1눈금당 배율 (1.1배씩)
+  maxZoomFactor = 4.0, -- 최대 확대 = fit 배율 × 이 값 (지도 fit 대비 몇 배까지 확대)
+}
+
+-- 입력 동작 상수.
+config.input = {
+  dragThreshold = 8, -- 누른 뒤 이동량(px)이 이 값 미만이면 클릭, 이상이면 드래그(팬)
 }
 
 -- 지도 렌더 상수.

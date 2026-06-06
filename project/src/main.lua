@@ -33,21 +33,41 @@ local state = {
   cam = nil,
   font = nil,
   selectedId = nil,
-  drag = { active = false },
+  -- 마우스 누름 상태. 누르면 생기고 떼면 nil.
+  --   x,y    : 누른 스크린 좌표(클릭 판정 기준점)
+  --   moved  : 누른 뒤 누적 이동 픽셀(임계 비교용)
+  --   dragging : 임계 초과해 드래그(팬)로 전환됐는지
+  press = nil,
 }
 
---- 헥스 중심들의 평균을 화면 중앙에 두도록 카메라 초기 위치 계산.
--- @return number, number  cam.x, cam.y
-local function initialCameraOffset(centers, scale)
-  local sx, sy, n = 0, 0, 0
-  for _, c in pairs(centers) do
-    sx = sx + c.x; sy = sy + c.y; n = n + 1
+--- 모든 헥스 꼭짓점을 감싸는 월드 경계(AABB)를 구한다. (카메라 클램프용)
+-- @param corners table  [id] = {x1,y1,...}
+-- @return table  { x0, y0, x1, y1 }
+local function mapBounds(corners)
+  local x0, y0, x1, y1 = math.huge, math.huge, -math.huge, -math.huge
+  for _, poly in pairs(corners) do
+    for i = 1, #poly, 2 do
+      local px, py = poly[i], poly[i + 1]
+      if px < x0 then x0 = px end
+      if py < y0 then y0 = py end
+      if px > x1 then x1 = px end
+      if py > y1 then y1 = py end
+    end
   end
-  local cx, cy = sx / n, sy / n
-  -- love.graphics.getDimensions(): 현재 창 크기(픽셀 폭, 높이)를 반환.
+  return { x0 = x0, y0 = y0, x1 = x1, y1 = y1 }
+end
+
+--- 화면 크기에 맞춰 카메라 줌 하한(fit)·상한을 다시 잡고 경계 안으로 클램프.
+-- load 와 창 크기 변경(love.resize) 양쪽에서 호출.
+local function refitCamera()
+  local cam = state.cam
   local w, h = love.graphics.getDimensions()
-  -- 화면 중앙이 지도 중심(cx,cy)을 가리키게: cam.xy = center - 화면절반/scale.
-  return cx - (w / 2) / scale, cy - (h / 2) / scale
+  -- 줌아웃 바닥 = 전체 지도 fit 배율. 상한 = fit × maxZoomFactor.
+  local fit = Camera.fitScale(cam, w, h)
+  cam.minScale = fit
+  cam.maxScale = fit * config.camera.maxZoomFactor
+  if cam.scale < fit then cam.scale = fit end -- 현재 배율이 바닥 밑이면 끌어올림
+  Camera.clamp(cam, w, h)
 end
 
 --- LÖVE 시작 시 1회. 폰트 로드·헥스 기하 캐시·카메라 초기화.
@@ -66,13 +86,15 @@ function love.load()
     state.corners[r.id] = Hex.corners(cx, cy, size)
   end
 
-  local scale = 1.0
-  local ox, oy = initialCameraOffset(state.centers, scale)
-  state.cam = Camera.new({
-    x = ox, y = oy, scale = scale,
-    minScale = config.camera.minScale,
-    maxScale = config.camera.maxScale,
-  })
+  -- 지도 경계로 카메라 생성. scale=0 으로 두고 refit 이 fit 배율을 채운다.
+  state.cam = Camera.new({ x = 0, y = 0, scale = 0, bounds = mapBounds(state.corners) })
+  refitCamera() -- 초기 줌=전체 지도 fit, 중앙 정렬
+end
+
+--- 창 크기 변경 시 카메라 재적합(fit/클램프). LÖVE 가 자동 호출.
+-- @param w,h number  새 창 크기
+function love.resize(w, h)
+  refitCamera()
 end
 
 --- 매 프레임 상태 갱신. (현재 입력 즉시 반영이라 비움)
@@ -155,35 +177,56 @@ function love.draw()
   love.graphics.print(info, 16, 16)
 end
 
---- 좌클릭: 드래그 시작 + 클릭 헥스 선택.
+--- 좌버튼 누름: 누름 상태만 기록(아직 선택/팬 안 함).
+-- 클릭이냐 드래그냐는 떼거나 임계 초과 시점에 결정한다(아래 두 콜백).
 -- @param x,y number  스크린 좌표
 -- @param button number  1=좌, 2=우, 3=중 (LÖVE 마우스 버튼 번호)
--- @side 부작용: state.drag.active, state.selectedId 변경
+-- @side 부작용: state.press 설정
 function love.mousepressed(x, y, button)
   if button ~= 1 then return end -- 좌클릭만 처리(우/중클릭 무시)
-  state.drag.active = true
-  -- 클릭은 스크린 좌표 → 카메라로 월드 좌표 환산해야 헥스와 비교 가능.
-  local wx, wy = Camera.screenToWorld(state.cam, x, y)
+  state.press = { x = x, y = y, moved = 0, dragging = false }
+end
+
+--- 마우스 이동: 누른 상태면 누적 이동을 보고 클릭/드래그를 가른다.
+-- 누적 이동 < 임계 → 아직 클릭 후보(팬 안 함). 임계 도달 → 드래그 확정 → 팬.
+-- (임계 전 미세 이동으로 화면이 떨리지 않도록, 확정 이후에만 카메라를 움직인다.)
+-- @param x,y number   현재 스크린 좌표(미사용)
+-- @param dx,dy number 직전 대비 이동량(픽셀) — LÖVE 가 제공
+-- @side 부작용: state.press.moved/dragging, 카메라 위치
+function love.mousemoved(x, y, dx, dy)
+  local p = state.press
+  if not p then return end -- 버튼 안 눌렀으면 무시
+
+  -- 이번 프레임 이동 거리를 누적(맨해튼 근사 대신 유클리드).
+  p.moved = p.moved + math.sqrt(dx * dx + dy * dy)
+  if not p.dragging and p.moved >= config.input.dragThreshold then
+    p.dragging = true -- 임계 초과 → 드래그(팬)로 전환, 이후 클릭 취소
+  end
+
+  if p.dragging then
+    -- 커서를 따라 지도가 끌려오도록 카메라는 반대로(-dx,-dy) 이동 후 경계 클램프.
+    Camera.move(state.cam, -dx, -dy)
+    local w, h = love.graphics.getDimensions()
+    Camera.clamp(state.cam, w, h)
+  end
+end
+
+--- 좌버튼 뗌: 드래그가 아니었으면(이동 < 임계) 그때서야 클릭 = 헥스 선택.
+-- 드래그였으면 선택하지 않는다(요구사항: 큰 이동은 팬만).
+-- @side 부작용: state.selectedId, state.press 해제
+function love.mousereleased(x, y, button)
+  if button ~= 1 then return end
+  local p = state.press
+  state.press = nil
+  if not p or p.dragging then return end -- 드래그였으면 선택 취소
+
+  -- 클릭 확정: 누른 지점을 월드 좌표로 환산해 헥스 선택.
+  local wx, wy = Camera.screenToWorld(state.cam, p.x, p.y)
   local hit = Region.cellAt(state.regions, wx, wy, config.map.hexSize)
   if hit then state.selectedId = hit.id end
 end
 
---- 좌버튼 드래그 중 카메라 패닝.
--- @param x,y number   현재 스크린 좌표(미사용)
--- @param dx,dy number 직전 프레임 대비 이동량(픽셀) — LÖVE 가 제공
--- @side 부작용: 카메라 위치 이동
-function love.mousemoved(x, y, dx, dy)
-  if not state.drag.active then return end -- 버튼 안 눌렀으면 패닝 안 함
-  -- 커서를 따라 지도가 끌려오도록 카메라는 반대로(-dx,-dy) 이동.
-  Camera.move(state.cam, -dx, -dy)
-end
-
---- 좌버튼 뗌 → 드래그 종료.
-function love.mousereleased(x, y, button)
-  if button == 1 then state.drag.active = false end
-end
-
---- 휠 → 커서 기준 줌.
+--- 휠 → 커서 기준 줌. 줌 후 경계 클램프(줌아웃 바닥=전체 fit).
 -- @param dx number  가로 휠(미사용)
 -- @param dy number  세로 휠: >0 위로(확대), <0 아래로(축소)
 -- @side 부작용: 카메라 배율/위치 변경
@@ -194,4 +237,6 @@ function love.wheelmoved(dx, dy)
   -- love.mouse.getPosition(): 현재 커서의 스크린 좌표(x,y) 반환. 줌 고정점으로 사용.
   local mx, my = love.mouse.getPosition()
   Camera.zoomAt(state.cam, factor, mx, my)
+  local w, h = love.graphics.getDimensions()
+  Camera.clamp(state.cam, w, h) -- 줌 후 지도 밖이 보이지 않게 가둠
 end

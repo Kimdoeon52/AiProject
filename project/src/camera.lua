@@ -28,8 +28,9 @@ function Camera.new(opts)
     x = opts.x or 0,            -- 화면 좌상단의 월드 X
     y = opts.y or 0,            -- 화면 좌상단의 월드 Y
     scale = opts.scale or 1,    -- 현재 줌 배율
-    minScale = opts.minScale or 0.1, -- 줌 하한
+    minScale = opts.minScale or 0.1, -- 줌 하한(전체 지도 fit 배율)
     maxScale = opts.maxScale or 10,  -- 줌 상한
+    bounds = opts.bounds,       -- { x0,y0,x1,y1 } 지도 월드 경계(클램프용). nil 이면 무제한
   }
 end
 
@@ -93,6 +94,46 @@ function Camera.zoomAt(cam, factor, sx, sy)
   --    world = screen/scale + cam.xy  →  cam.xy = world - screen/scale
   cam.x = wx - sx / cam.scale
   cam.y = wy - sy / cam.scale
+  return cam
+end
+
+--- 지도 경계와 화면 크기에 맞춰 줌 하한(minScale)을 다시 계산한다.
+-- 줌아웃 바닥 = "전체 지도가 화면 안에 다 들어오는 배율"(fit). 더는 못 줄임.
+--   fit = min(화면폭/지도폭, 화면높이/지도높이).
+-- @param cam table  bounds 가 설정돼 있어야 함
+-- @param sw,sh number  화면 픽셀 크기
+-- @return number  계산된 fit 배율(= 새 minScale)
+function Camera.fitScale(cam, sw, sh)
+  local b = cam.bounds
+  if not b then return cam.minScale end
+  local bw, bh = b.x1 - b.x0, b.y1 - b.y0
+  return math.min(sw / bw, sh / bh)
+end
+
+--- 카메라 위치를 지도 경계 안으로 가둔다 (팬 클램프).
+-- 보이는 월드 영역 [x, x+vw] × [y, y+vh] 가 bounds 를 벗어나지 못하게 한다.
+-- 보이는 영역이 지도보다 크면(축소 상태) 가운데 정렬해 한쪽으로 못 치우게 한다.
+-- @param cam table  bounds 필요
+-- @param sw,sh number  화면 픽셀 크기
+-- @return table  cam
+function Camera.clamp(cam, sw, sh)
+  local b = cam.bounds
+  if not b then return cam end
+  local vw, vh = sw / cam.scale, sh / cam.scale -- 보이는 월드 폭/높이
+  local bw, bh = b.x1 - b.x0, b.y1 - b.y0
+
+  -- 가로: 지도보다 넓게 보이면 중앙 고정, 아니면 [x0, x1-vw] 로 클램프.
+  if vw >= bw then
+    cam.x = b.x0 - (vw - bw) / 2
+  else
+    cam.x = clamp(cam.x, b.x0, b.x1 - vw)
+  end
+  -- 세로: 동일 규칙.
+  if vh >= bh then
+    cam.y = b.y0 - (vh - bh) / 2
+  else
+    cam.y = clamp(cam.y, b.y0, b.y1 - vh)
+  end
   return cam
 end
 

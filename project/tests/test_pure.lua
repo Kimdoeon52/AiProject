@@ -47,6 +47,29 @@ do
   check(cam3.scale <= 3 + 1e-9, "zoomAt maxScale 클램프")
 end
 
+-- ── camera 경계/줌 클램프 ────────────────────────────────
+do
+  local b = { x0 = 0, y0 = 0, x1 = 1000, y1 = 500 }
+  local cam = Camera.new({ bounds = b })
+
+  -- fitScale = min(2000/1000, 1000/500) = 2
+  check(approx(Camera.fitScale(cam, 2000, 1000), 2), "fitScale = 전체 fit")
+
+  -- 줌아웃(scale=fit=2): 보이는 폭 vw=2000/2=1000=지도폭 → 중앙 고정(cam.x=0).
+  cam.scale = 2
+  Camera.clamp(cam, 2000, 1000)
+  check(approx(cam.x, 0) and approx(cam.y, 0), "clamp 축소 시 중앙 고정")
+
+  -- 줌인(scale=4): vw=500 < 1000. 왼쪽 밖(-100) → x0=0 으로, 오른쪽 밖(9999) → x1-vw=500.
+  cam.scale = 4
+  cam.x = -100; cam.y = -100
+  Camera.clamp(cam, 2000, 1000)
+  check(cam.x >= 0 - 1e-9, "clamp 좌측 경계")
+  cam.x = 9999
+  Camera.clamp(cam, 2000, 1000)
+  check(approx(cam.x, 1000 - 500), "clamp 우측 경계")
+end
+
 -- ── hex ──────────────────────────────────────────────────
 do
   local size = 64
