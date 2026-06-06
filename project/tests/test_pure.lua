@@ -188,6 +188,14 @@ do
   local owned = 0
   for _ in pairs(warlords.ownership) do owned = owned + 1 end
   check(owned == 30, "194 전 지역 소유 (실제=" .. owned .. ")")
+
+  -- 184 황건의 난도 전 지역 분할(한 관군 제거, 군벌 배치). 'han' 세력 없어야.
+  local yt
+  for _, sc in ipairs(scenarios) do if sc.id == "yellow_turban" then yt = sc end end
+  local owned184 = 0
+  for _ in pairs(yt.ownership) do owned184 = owned184 + 1 end
+  check(owned184 == 30, "184 전 지역 소유 (실제=" .. owned184 .. ")")
+  check(yt.factions.han == nil, "184 한 관군 세력 제거됨")
 end
 
 -- ── 결과 ─────────────────────────────────────────────────

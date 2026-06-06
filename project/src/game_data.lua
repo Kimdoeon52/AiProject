@@ -65,29 +65,39 @@ game_data.regions = {
 
 -- ── 시나리오 (배열 순서 = 선택 화면 표시 순서) ────────────
 game_data.scenarios = {
-  -- ① 184 황건의 난 — 한 관군 vs 황건적 + 변경 군벌
+  -- ① 184 황건의 난 — 황건적 vs 각지 군벌(게임적 허용으로 군웅 배치, 한 관군 제외)
   {
     id = "yellow_turban", name = "황건의 난", year = 184,
     factions = {
-      han          = { name = "한 관군",   color = { 0.88, 0.80, 0.42 } }, -- 한실 금황
       yellowturban = { name = "황건적",     color = { 0.78, 0.60, 0.16 } }, -- 황토
       dongzhuo     = { name = "동탁",       color = { 0.70, 0.22, 0.22 } }, -- 암적
+      mateng       = { name = "마등",       color = { 0.92, 0.58, 0.20 } }, -- 서량 주황
       liuyan       = { name = "유언",       color = { 0.32, 0.66, 0.58 } }, -- 익주 청록
+      hejin        = { name = "하진",       color = { 0.86, 0.74, 0.45 } }, -- 한실 외척 금황
+      dingyuan     = { name = "정원",       color = { 0.55, 0.60, 0.35 } }, -- 병주 올리브
+      gongsunzan   = { name = "공손찬",     color = { 0.30, 0.68, 0.70 } }, -- 유주 청록
+      sunjian      = { name = "손견",       color = { 0.85, 0.25, 0.25 } }, -- 손씨 빨강
     },
     ownership = {
-      -- 황건적 봉기지(기/청/연/예/형 일부)
+      -- 황건적 봉기지(기/청/연/예/형/서 일부)
       ye = "yellowturban", pingyuan = "yellowturban", puyang = "yellowturban",
       runan = "yellowturban", xinye = "yellowturban",
-      -- 동탁(서량)
-      tianshui = "dongzhuo", wuwei = "dongzhuo",
+      pengcheng = "yellowturban", xiapi = "yellowturban", guangling = "yellowturban",
+      -- 동탁(서량 동부·관중)
+      wuwei = "dongzhuo", changan = "dongzhuo",
+      -- 마등(서량 천수)
+      tianshui = "mateng",
       -- 유언(익주)
       chengdu = "liuyan", jiangzhou = "liuyan", yunnan = "liuyan", hanzhong = "liuyan",
-      -- 나머지는 한 관군
-      jinyang = "han", bohai = "han", beiping = "han", changan = "han",
-      hongnong = "han", luoyang = "han", chenliu = "han", xuchang = "han",
-      pengcheng = "han", xiapi = "han", xiangyang = "han", jiangling = "han",
-      wuling = "han", changsha = "han", jianye = "han", guangling = "han",
-      wujun = "han", kuaiji = "han", chaisang = "han",
+      -- 하진(대장군, 낙양 중앙·예주)
+      luoyang = "hejin", hongnong = "hejin", chenliu = "hejin", xuchang = "hejin",
+      -- 정원(병주)
+      jinyang = "dingyuan",
+      -- 공손찬(유주)
+      beiping = "gongsunzan", bohai = "gongsunzan",
+      -- 손견(강동 부춘 출신 + 형남)
+      changsha = "sunjian", wuling = "sunjian", jiangling = "sunjian", xiangyang = "sunjian",
+      jianye = "sunjian", wujun = "sunjian", kuaiji = "sunjian", chaisang = "sunjian",
     },
   },
 
