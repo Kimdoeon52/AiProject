@@ -129,14 +129,6 @@ do
   end
   check(dup == 0, "axial 좌표 중복 없음")
 
-  -- owner 유효.
-  local valid = { wei = true, shu = true, wu = true, neutral = true }
-  local badOwner = 0
-  for _, r in ipairs(regions) do
-    if not valid[r.owner] then badOwner = badOwner + 1 end
-  end
-  check(badOwner == 0, "owner 값 유효")
-
   -- GDD 5장 명시 30 이름과 정확히 일치.
   local expected = {
     "북평","발해","업","평원","진양","낙양","장안","홍농","복양","진류",
@@ -158,6 +150,44 @@ do
   local bad = 0
   for _, r in ipairs(regions) do if banned[r.name] then bad = bad + 1 end end
   check(bad == 0, "금지 지명 없음")
+end
+
+-- ── 시나리오 무결성 ──────────────────────────────────────
+do
+  local scenarios = game_data.scenarios
+  local regions = game_data.regions
+
+  check(#scenarios == 3, "시나리오 3개 (184/194/221)")
+
+  -- 유효한 region id 집합.
+  local regSet = {}
+  for _, r in ipairs(regions) do regSet[r.id] = true end
+
+  local badOwnKey, badOwnVal, badFaction = 0, 0, 0
+  for _, sc in ipairs(scenarios) do
+    -- 각 세력은 이름 + 색(3채널) 필요.
+    for fid, f in pairs(sc.factions) do
+      if type(f.name) ~= "string" or type(f.color) ~= "table" or #f.color ~= 3 then
+        badFaction = badFaction + 1
+        print("  [faction] " .. sc.id .. "/" .. fid)
+      end
+    end
+    -- ownership: 키=실재 region, 값=실재 faction id.
+    for rid, fid in pairs(sc.ownership) do
+      if not regSet[rid] then badOwnKey = badOwnKey + 1; print("  [own key] " .. sc.id .. "/" .. rid) end
+      if not sc.factions[fid] then badOwnVal = badOwnVal + 1; print("  [own val] " .. sc.id .. "/" .. tostring(fid)) end
+    end
+  end
+  check(badFaction == 0, "세력은 이름+색(3채널)")
+  check(badOwnKey == 0, "ownership 키 = 실재 지역")
+  check(badOwnVal == 0, "ownership 값 = 실재 세력")
+
+  -- 194 군웅할거는 전 지역 소유(중립 없음) — 11세력 분할 검증.
+  local warlords
+  for _, sc in ipairs(scenarios) do if sc.id == "warlords" then warlords = sc end end
+  local owned = 0
+  for _ in pairs(warlords.ownership) do owned = owned + 1 end
+  check(owned == 30, "194 전 지역 소유 (실제=" .. owned .. ")")
 end
 
 -- ── 결과 ─────────────────────────────────────────────────
