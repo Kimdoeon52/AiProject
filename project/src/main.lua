@@ -226,17 +226,21 @@ function love.mousereleased(x, y, button)
   if hit then state.selectedId = hit.id end
 end
 
---- 휠 → 커서 기준 줌. 줌 후 경계 클램프(줌아웃 바닥=전체 fit).
+--- 휠 → 커서 기준 줌.
+-- [비활성] 현재 지도는 항상 "전체 fit" 으로 보여서 확대의 쓸모가 불명확 →
+--   줌 동작을 잠시 꺼둔다(코드는 보존). 확대 기능을 다시 쓰려면 아래 블록의
+--   주석을 풀면 된다. (camera.zoomAt/fitScale/maxZoomFactor 는 그대로 살아있음.)
 -- @param dx number  가로 휠(미사용)
 -- @param dy number  세로 휠: >0 위로(확대), <0 아래로(축소)
--- @side 부작용: 카메라 배율/위치 변경
+-- @side 부작용: (활성 시) 카메라 배율/위치 변경
 function love.wheelmoved(dx, dy)
-  if dy == 0 then return end -- 세로 휠 없으면 무시
-  -- 한 칸당 zoomStep 배. 아래로는 그 역수(1/step)로 축소.
-  local factor = (dy > 0) and config.camera.zoomStep or (1 / config.camera.zoomStep)
-  -- love.mouse.getPosition(): 현재 커서의 스크린 좌표(x,y) 반환. 줌 고정점으로 사용.
-  local mx, my = love.mouse.getPosition()
-  Camera.zoomAt(state.cam, factor, mx, my)
-  local w, h = love.graphics.getDimensions()
-  Camera.clamp(state.cam, w, h) -- 줌 후 지도 밖이 보이지 않게 가둠
+  -- // 줌 비활성: 아무 것도 안 함. 재활성하려면 아래 주석 해제.
+  -- if dy == 0 then return end -- 세로 휠 없으면 무시
+  -- -- 한 칸당 zoomStep 배. 아래로는 그 역수(1/step)로 축소.
+  -- local factor = (dy > 0) and config.camera.zoomStep or (1 / config.camera.zoomStep)
+  -- -- love.mouse.getPosition(): 현재 커서의 스크린 좌표(x,y) 반환. 줌 고정점으로 사용.
+  -- local mx, my = love.mouse.getPosition()
+  -- Camera.zoomAt(state.cam, factor, mx, my)
+  -- local w, h = love.graphics.getDimensions()
+  -- Camera.clamp(state.cam, w, h) -- 줌 후 지도 밖이 보이지 않게 가둠
 end
