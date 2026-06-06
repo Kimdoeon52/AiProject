@@ -1,0 +1,23 @@
+{
+    "editor.formatOnSave": true,
+    "files.associations": {
+        "*.lua": "lua"
+    },
+    "Lua.runtime.version": "LuaJIT",
+    "Lua.runtime.pathStrict": true,
+    "Lua.diagnostics.globals": [
+        "love",
+        "jit",
+        "utf8"
+    ],
+    "Lua.workspace.checkThirdParty": false,
+    "Lua.workspace.library": [
+        "${3rd}/love2d/library"
+    ],
+    "code-runner.executorMap": {
+        "lua": "lua"
+    },
+    "code-runner.runInTerminal": false,
+    "code-runner.saveFileBeforeRun": true,
+    "code-runner.clearPreviousOutput": true
+}

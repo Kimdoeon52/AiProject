@@ -1,0 +1,7 @@
+# 비공개 기획 문서 (혹시 들어와도 제외)
+PLAYBOOK.md
+DAILY_PROMPTS.md
+
+# 세이브/임시
+*.save
+*.log
