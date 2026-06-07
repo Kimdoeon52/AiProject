@@ -20,14 +20,16 @@ main.lua — LÖVE2D 생명주기 (표현·입력 계층)
 
 local config = require("config")
 local game_data = require("game_data")
+local GameState = require("game_state")
 local Camera = require("camera")
 local Region = require("region")
 local Hex = require("hex")
 local UI = require("ui")
+local Popup = require("popup")
 
 -- 모듈 지역 상태 (전역 아님).
 local state = {
-  scene = "select",   -- "select" | "map"
+  scene = "select",   -- "select" | "faction" | "map"
   scenario = nil,     -- 선택된 시나리오 레코드(game_data.scenarios 의 한 항목)
   regions = nil,      -- 지역(헥스) 데이터
   centers = nil,      -- [id] = {x,y} 헥스 중심 픽셀 (캐시)
@@ -36,6 +38,17 @@ local state = {
   font = nil,
   titleFont = nil,    -- 선택 화면 제목용 큰 폰트
   selectedId = nil,
+  turn = nil,         -- 턴 상태 { year, month, count } (GameState.newTurn)
+  officers = nil,     -- 런타임 장수 배열(GameState.buildOfficers). 턴 리셋 대상.
+  -- 플레이어(군주) 정보 — 세력 선택 후 확정.
+  playerFactionId = nil, -- 플레이어 세력 id (흰 테두리·선물 게이팅 기준)
+  gold = 0,              -- 플레이어 군주 금 보유고(GDD 9장). 금 선물로 차감.
+  -- 팝업 UI 상태(지도 화면). draw 는 읽기만, 변경은 입력 콜백.
+  listOpen = false,   -- 장수 목록 팝업 열림 여부
+  detailId = nil,     -- 상세 보는 장수 id (nil=목록만)
+  sub = nil,          -- 서브 팝업: nil | "gold" (금 선물)
+  giftAmount = 1,     -- 금 선물 선택 금액(1~goldGiftMax)
+  notice = nil,       -- 일시 안내 문구(예: "금 부족") — 표시용
   -- 마우스 누름 상태(지도 화면 전용). 누르면 생기고 떼면 nil.
   press = nil,
 }
@@ -169,6 +182,75 @@ local function drawSelect()
   love.graphics.printf("시나리오를 클릭해 시작", 0, love.graphics.getHeight() - 60, w, "center")
 end
 
+-- ── 세력(군주) 선택 화면 ─────────────────────────────────
+
+--- 장수 베이스에서 id 로 이름을 찾는다(군주 이름 표시용 헬퍼).
+-- @param id string
+-- @return string  이름(없으면 id 그대로)
+local function officerBaseName(id)
+  for _, o in ipairs(game_data.officers) do
+    if o.id == id then return o.name end
+  end
+  return id
+end
+
+--- 현재 시나리오의 세력을 표시 순서가 안정적인 배열로 만든다.
+-- factions 는 id 키 테이블(순회 순서 비결정) → id 기준 정렬로 매번 같은 순서 보장.
+-- @return table  { {id=, faction=}, ... }
+local function sortedFactions()
+  local list = {}
+  for fid, f in pairs(state.scenario.factions) do
+    list[#list + 1] = { id = fid, faction = f }
+  end
+  -- table.sort(t, cmp): 제자리 정렬. cmp(a,b)=a가 b보다 앞이면 true.
+  --   (C# List.Sort(Comparison) / C++ std::sort 와 같은 개념)
+  table.sort(list, function(a, b) return a.id < b.id end)
+  return list
+end
+
+--- 세력 선택 버튼 목록을 만든다. (draw·입력 공유 레이아웃)
+-- @return table  UI 버튼 배열(value = 세력 id)
+local function buildFactionButtons()
+  local w, h = love.graphics.getDimensions()
+  local list = sortedFactions()
+  local bw, bh, gap = 620, 56, 14
+  local n = #list
+  local totalH = n * bh + (n - 1) * gap
+  local x = (w - bw) / 2
+  local y0 = h / 2 - totalH / 2 + 40
+  local btns = {}
+  for i, item in ipairs(list) do
+    -- 라벨: "세력명 — 군주: 군주명". 군주=세력 lord 장수.
+    local label = string.format("%s   —   군주: %s", item.faction.name, officerBaseName(item.faction.lord))
+    btns[i] = UI.newButton(x, y0 + (i - 1) * (bh + gap), bw, bh, label, item.id)
+  end
+  return btns
+end
+
+--- 세력 선택 화면을 그린다. (읽기 전용)
+local function drawFactionSelect()
+  local w = love.graphics.getWidth()
+  love.graphics.clear(config.colors.background)
+
+  love.graphics.setFont(state.titleFont)
+  love.graphics.setColor(config.colors.text)
+  love.graphics.printf(state.scenario.name .. " — 세력 선택", 0, 70, w, "center")
+
+  love.graphics.setFont(state.font)
+  local mx, my = love.mouse.getPosition()
+  for _, btn in ipairs(buildFactionButtons()) do
+    local hovered = UI.hit(btn, mx, my)
+    -- 세력색 견본을 버튼 왼쪽에 칠해 색 구분(GDD 6장).
+    local f = state.scenario.factions[btn.value]
+    UI.draw(btn, { hovered = hovered, accent = config.colors.selectBorder })
+    love.graphics.setColor(f.color)
+    love.graphics.rectangle("fill", btn.x + 10, btn.y + btn.h / 2 - 10, 20, 20, 3, 3)
+  end
+
+  love.graphics.setColor(config.colors.text)
+  love.graphics.printf("플레이할 세력을 클릭   ·   Esc=시나리오로", 0, love.graphics.getHeight() - 60, w, "center")
+end
+
 -- ── 지도 화면 ────────────────────────────────────────────
 
 --- 헥스 지도: ① 채움(시나리오 세력색) → ② 경계 → ③ 선택 → ④ 이름.
@@ -185,6 +267,17 @@ local function drawHexMap()
   love.graphics.setLineWidth(config.map.borderWidth)
   for _, r in ipairs(regions) do
     love.graphics.polygon("line", corners[r.id])
+  end
+
+  -- 플레이어 소유 지역에 흰 테두리(GDD 6장). 소유=현재 시나리오 ownership 이 플레이어 세력.
+  if state.playerFactionId then
+    love.graphics.setColor(config.colors.playerBorder)
+    love.graphics.setLineWidth(config.map.selectBorderWidth)
+    for _, r in ipairs(regions) do
+      if state.scenario.ownership[r.id] == state.playerFactionId then
+        love.graphics.polygon("line", corners[r.id])
+      end
+    end
   end
 
   if state.selectedId then
@@ -221,6 +314,125 @@ local function drawLegend()
   end
 end
 
+-- ── 우측 패널 + 턴 버튼 (GDD 17장) ───────────────────────
+
+--- 우측 패널의 화면 사각형(스크린 좌표)을 계산한다.
+-- 화면 오른쪽에 세로로 꽉 차는 고정 패널. 클릭이 패널 위인지 판정에도 쓴다.
+-- @return number,number,number,number  x, y, w, h
+local function panelRect()
+  local sw, sh = love.graphics.getDimensions()
+  local w = config.panel.width
+  return sw - w, 0, w, sh
+end
+
+--- 최하단 턴 버튼을 만든다(패널 레이아웃 기준). draw·클릭에서 같은 버튼 공유.
+-- @return table  UI 버튼 레코드(라벨 = 다음 진행 안내)
+local function turnButton()
+  local px, _, pw = panelRect()
+  local sh = love.graphics.getHeight()
+  local m, bh = config.panel.buttonMargin, config.panel.buttonHeight
+  local x = px + m
+  local y = sh - m - bh          -- 패널 하단에서 margin 만큼 위
+  local w = pw - m * 2
+  return UI.newButton(x, y, w, bh, "턴 종료 ▶ (다음 달)", "endturn")
+end
+
+--- "장수 확인" 버튼을 만든다(턴 버튼 바로 위). draw·클릭 공유 레이아웃.
+-- @return table  UI 버튼
+local function officerCheckButton()
+  local tb = turnButton()
+  local gap = 12
+  -- 턴 버튼 위에 한 칸. 같은 폭/높이.
+  return UI.newButton(tb.x, tb.y - tb.h - gap, tb.w, tb.h, "장수 확인", "officers")
+end
+
+--- 턴 진행에 넘길 컨텍스트(장수 목록 + 미구현 시스템 훅)를 만든다.
+-- 아직 없는 시스템(도착·성장·AI·수확)은 로그만 남기는 스텁 콜백으로 둔다.
+--   콜백은 game_state.advanceTurn 이 정해진 순서로 호출(시그니처 function(turn, ctx)).
+-- @return table  ctx
+local function turnContext()
+  return {
+    officers = state.officers, -- 어제 작업: 턴 시작 시 행동완료 리셋 대상
+    -- print(): 콘솔(터미널) 출력. love.graphics.print(화면 그리기)와 다름.
+    --   lovec(콘솔판)에서 보임 → 7월 수확 훅 호출 검증용.
+    onTurnEnd = function(t) print(string.format("[턴] %d년 %d월 종료 (턴 #%d)", t.year, t.month, t.count)) end,
+    onHarvest = function(t) print(string.format("[수확 훅] %d년 %d월 — 군량 수확 (GDD 9장, 계산 미구현)", t.year, t.month)) end,
+    -- onArrivals / onGrowth / onAI 는 아직 미정 → 생략(=빈 스텁). 시스템 생기면 끼운다.
+  }
+end
+
+--- 턴을 한 칸 진행한다(버튼 클릭 시). 규칙은 game_state 가 담당.
+-- 부작용: state.turn(연/월/카운트) 변경, 장수 행동완료 리셋.
+local function advanceGameTurn()
+  GameState.advanceTurn(state.turn, turnContext())
+end
+
+--- 우측 정보 패널을 그린다. (읽기 전용)
+-- 상단: 현재 연/월 → 그 아래 선택 지역 정보 → 최하단 턴 버튼.
+local function drawPanel()
+  local px, py, pw, ph = panelRect()
+
+  -- 패널 배경(반투명). setColor 4번째 인자 = 알파.
+  love.graphics.setColor(config.panel.bg)
+  love.graphics.rectangle("fill", px, py, pw, ph)
+
+  local x = px + config.panel.pad
+  local y = py + config.panel.pad
+  local textW = pw - config.panel.pad * 2
+  local gap = config.panel.lineGap
+
+  -- ① 상단: 현재 연/월 (GDD 17장 날짜).
+  love.graphics.setColor(config.colors.text)
+  local t = state.turn
+  love.graphics.print(string.format("%d년 %d월", t.year, t.month), x, y)
+  y = y + gap
+  love.graphics.print(state.scenario.name, x, y)
+  y = y + gap
+  -- 플레이어 세력명 + 군주 금 보유고(GDD 9장).
+  local pf = state.playerFactionId and state.scenario.factions[state.playerFactionId]
+  if pf then
+    love.graphics.print("세력: " .. pf.name, x, y); y = y + gap
+    love.graphics.print("금: " .. state.gold, x, y); y = y + gap
+  end
+  y = y + 6
+
+  -- 구분선
+  love.graphics.setColor(0.3, 0.32, 0.38)
+  love.graphics.setLineWidth(1)
+  love.graphics.line(x, y, x + textW, y)
+  y = y + 10
+
+  -- ② 선택 지역 정보(있으면).
+  love.graphics.setColor(config.colors.text)
+  local sel = state.selectedId and Region.byId(state.regions, state.selectedId) or nil
+  if sel then
+    love.graphics.print(sel.name, x, y); y = y + gap
+    love.graphics.print("소유: " .. regionFactionName(sel), x, y); y = y + gap
+    -- 이 지역 장수 수(어제 작업 연결). state.officers 가 있을 때만.
+    if state.officers then
+      local here = GameState.officersInRegion(state.officers, sel.id)
+      love.graphics.print("장수: " .. #here .. "명", x, y); y = y + gap
+    end
+  else
+    love.graphics.setColor(0.7, 0.72, 0.78)
+    love.graphics.print("지역을 클릭해 선택", x, y)
+  end
+
+  -- ③ 하단 버튼들: "장수 확인"(선택 지역 있을 때만 활성) + "턴 종료".
+  local mx, my = love.mouse.getPosition()
+
+  local chk = officerCheckButton()
+  if state.selectedId then
+    UI.draw(chk, { hovered = UI.hit(chk, mx, my), accent = config.colors.selectBorder })
+  else
+    -- 비활성 표시(회색 텍스트). 클릭 무시(입력에서 selectedId 확인).
+    UI.draw(chk, { text = { 0.5, 0.52, 0.58 }, border = { 0.3, 0.31, 0.36 } })
+  end
+
+  local btn = turnButton()
+  UI.draw(btn, { hovered = UI.hit(btn, mx, my), accent = config.colors.selectBorder })
+end
+
 --- 지도 화면을 그린다. (읽기 전용)
 -- 카메라 변환(scale→translate) 안에서 헥스 지도 → 변환 밖에서 화면 고정 오버레이
 -- (시나리오/선택 정보 + 세력 범례).
@@ -233,16 +445,15 @@ local function drawMap()
   drawHexMap()
   love.graphics.pop()
 
-  -- 오버레이(화면 고정): 시나리오/선택 정보 + 범례.
+  -- 오버레이(화면 고정): 좌상단 헤더 + 범례 + 우측 정보 패널.
   love.graphics.setColor(config.colors.text)
   local head = string.format("%s (%d년)  ·  Esc=시나리오 선택", state.scenario.name, state.scenario.year)
   love.graphics.print(head, 16, 16)
-  local sel = state.selectedId and Region.byId(state.regions, state.selectedId) or nil
-  if sel then
-    love.graphics.printf(sel.name .. " — " .. regionFactionName(sel),
-      love.graphics.getWidth() - 320, 16, 304, "right")
-  end
   drawLegend()
+  -- 우측 패널(연/월 + 선택 지역 정보 + 턴 버튼). 선택 지역 표시는 여기로 통합.
+  drawPanel()
+  -- 팝업(장수 목록/상세/선물)은 패널 위에 모달로 덮어 그린다.
+  Popup.draw(state)
 end
 
 -- ── draw 디스패치 ────────────────────────────────────────
@@ -253,6 +464,8 @@ function love.draw()
   love.graphics.setFont(state.font)
   if state.scene == "select" then
     drawSelect()
+  elseif state.scene == "faction" then
+    drawFactionSelect()
   else
     drawMap()
   end
@@ -264,6 +477,22 @@ end
 -- @param idx number  game_data.scenarios 인덱스
 local function startScenario(idx)
   state.scenario = game_data.scenarios[idx]
+  state.selectedId = nil
+  -- 턴 상태(시작 연/월) + 런타임 장수 구성.
+  state.turn = GameState.newTurn(state.scenario)
+  state.officers = GameState.buildOfficers(game_data, state.scenario)
+  -- 시나리오 진입 후엔 "세력(군주) 선택" 단계로(GDD 3장 흐름 2번).
+  state.scene = "faction"
+end
+
+--- 플레이할 세력(군주)을 확정하고 지도로 진입한다.
+-- 군주 = 그 세력의 lord 장수(GDD 7장). 별도 타입 없이 세력 id 로 플레이어를 표시.
+-- 부작용: playerFactionId/gold 설정, 씬 전환, 카메라 재적합.
+-- @param factionId string  선택한 세력 id
+local function chooseFaction(factionId)
+  state.playerFactionId = factionId
+  -- 군주 금 보유고 시작값(GDD 9장). 세수 수입 도입 전 placeholder 상수.
+  state.gold = config.faction.startGold
   state.selectedId = nil
   state.scene = "map"
   refitCamera() -- 지도 진입 시 fit/중앙 맞춤
@@ -283,7 +512,35 @@ function love.mousepressed(x, y, button)
     return
   end
 
-  -- 지도: 누름 기록(클릭/드래그는 이동량으로 판정).
+  if state.scene == "faction" then
+    -- 세력(군주) 선택: 버튼 클릭 → 플레이어 세력 확정 후 지도로.
+    for _, btn in ipairs(buildFactionButtons()) do
+      if UI.hit(btn, x, y) then
+        chooseFaction(btn.value)
+        return
+      end
+    end
+    return
+  end
+
+  -- 지도: 팝업이 열려 있으면 팝업이 클릭을 먼저 소비(모달).
+  if Popup.consumeClick(state, x, y) then return end
+
+  -- 최하단 턴 버튼(누른 즉시 실행).
+  if UI.hit(turnButton(), x, y) then
+    advanceGameTurn()
+    return
+  end
+
+  -- "장수 확인" 버튼(선택 지역 있을 때만) → 목록 팝업 열기.
+  if state.selectedId and UI.hit(officerCheckButton(), x, y) then
+    state.listOpen = true
+    state.detailId = nil
+    state.sub = nil
+    return
+  end
+
+  -- 누름 기록(클릭/드래그는 이동량으로 판정).
   state.press = { x = x, y = y, moved = 0, dragging = false }
 end
 
@@ -309,6 +566,12 @@ function love.mousereleased(x, y, button)
   state.press = nil
   if not p or p.dragging then return end -- 드래그였으면 선택 취소
 
+  -- 누른 지점이 우측 패널 위면 지도 선택 안 함(패널이 지도를 가린다).
+  local px, py, pw, ph = panelRect()
+  if p.x >= px and p.x <= px + pw and p.y >= py and p.y <= py + ph then
+    return
+  end
+
   local wx, wy = Camera.screenToWorld(state.cam, p.x, p.y)
   local hit = Region.cellAt(state.regions, wx, wy, config.map.hexSize)
   if hit then state.selectedId = hit.id end
@@ -317,14 +580,27 @@ end
 --- 키 입력. 지도에서 Esc → 시나리오 선택으로 복귀.
 -- @param key string
 function love.keypressed(key)
-  if key == "escape" then
-    if state.scene == "map" then
+  if key ~= "escape" then return end
+
+  if state.scene == "map" then
+    -- 팝업이 열려 있으면 안쪽(서브팝업)부터 한 겹씩 닫는다(GDD 17장 ESC).
+    if state.sub then
+      state.sub = nil; state.notice = nil
+    elseif state.detailId then
+      state.detailId = nil
+    elseif state.listOpen then
+      state.listOpen = false
+    else
+      -- 팝업이 없으면 지도 → 시나리오 선택으로(상태 초기화).
       state.scene = "select"
       state.selectedId = nil
+      state.playerFactionId = nil
       state.press = nil
-    else
-      love.event.quit() -- 선택 화면에서 Esc → 종료
     end
+  elseif state.scene == "faction" then
+    state.scene = "select" -- 세력 선택 → 시나리오 선택으로
+  else
+    love.event.quit() -- 선택 화면에서 Esc → 종료
   end
 end
 
