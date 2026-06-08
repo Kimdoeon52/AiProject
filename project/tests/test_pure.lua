@@ -434,8 +434,8 @@ do
   check(roster[1].giftedGoldThisTurn == false and roster[1].giftedEquipThisTurn == false,
     "resetActions 선물 플래그 리셋")
 
-  -- 장비 선물은 이번 범위 밖(스텁) — 미구현 플래그 false.
-  check(GameState.EQUIP_IMPLEMENTED == false, "장비 미구현 스텁 플래그")
+  -- 장비 시스템 구현됨(이번 작업) — 플래그 true.
+  check(GameState.EQUIP_IMPLEMENTED == true, "장비 시스템 구현 플래그")
 end
 
 -- ── buildOfficers 선물 플래그 초기화 ─────────────────────
@@ -449,6 +449,105 @@ do
     end
   end
   check(allInit, "buildOfficers 선물 플래그/장비 초기값")
+end
+
+-- ── 태수 자동 선정 (game_state, GDD 5장) ─────────────────
+do
+  local S = GameState.STATE
+  local officers = {
+    { id = "a", region = "r1", state = S.active, isLord = false, loyalty = 70 },
+    { id = "b", region = "r1", state = S.active, isLord = false, loyalty = 90 },
+    { id = "lord", region = "r1", state = S.active, isLord = true },          -- 수장
+    { id = "d", region = "r2", state = S.active, isLord = false, loyalty = 50 },
+    { id = "e", region = "r2", state = S.active, isLord = false, loyalty = 50 }, -- d 와 동률
+    { id = "f", region = "r3", state = S.free, isLord = false, loyalty = 99 },  -- 재야(후보 아님)
+  }
+  -- 수장이 있으면 충성 무관하게 수장 고정.
+  check(GameState.assignGovernor(officers, "r1") == "lord", "태수: 수장 고정")
+  -- 수장 없는 지역(r2)은 동률 → rng 로 선택. rng=1 → d(먼저), rng=2 → e.
+  check(GameState.assignGovernor(officers, "r2", function() return 1 end) == "d", "태수: 동률 rng=1 → d")
+  check(GameState.assignGovernor(officers, "r2", function() return 2 end) == "e", "태수: 동률 rng=2 → e")
+  -- 후보가 재야뿐인 지역 → nil.
+  check(GameState.assignGovernor(officers, "r3") == nil, "태수: active 후보 0 → nil")
+  -- 존재하지 않는 지역 → nil.
+  check(GameState.assignGovernor(officers, "rX") == nil, "태수: 후보 없음 → nil")
+
+  -- 수장 없고 단독 최고 충성 → 그 장수.
+  local solo = {
+    { id = "x", region = "r1", state = S.active, isLord = false, loyalty = 60 },
+    { id = "y", region = "r1", state = S.active, isLord = false, loyalty = 80 },
+  }
+  check(GameState.assignGovernor(solo, "r1") == "y", "태수: 단독 최고 충성")
+
+  -- governorRegionOf 역조회.
+  local gov = { r1 = "lord", r2 = "d" }
+  check(GameState.governorRegionOf(gov, "d") == "r2", "governorRegionOf 역조회")
+  check(GameState.governorRegionOf(gov, "zzz") == nil, "governorRegionOf 없음 nil")
+
+  -- canSetGovernor: 같은 지역 active 만.
+  check(GameState.canSetGovernor({ region = "r1", state = S.active }, "r1") == true, "canSetGovernor 같은 지역")
+  check(GameState.canSetGovernor({ region = "r2", state = S.active }, "r1") == false, "canSetGovernor 다른 지역 불가")
+end
+
+-- ── 장비 보너스/유효 능력치 (game_state, GDD 8장) ────────
+do
+  local o = { might = 70, intel = 60, pol = 50, hp = 80, equip = nil }
+  -- 장비 없음: 보너스 0, 유효 = 기본.
+  check(GameState.statBonus(o, "might") == 0, "장비없음 보너스 0")
+  check(GameState.effectiveStat(o, "might") == 70, "장비없음 유효=기본")
+  check(GameState.hasStatBonus(o, "might") == false, "장비없음 보너스 표시 X")
+
+  -- 방천화극(force=20) 장착 → 무력 보너스 +20.
+  o.equip = { id = "sky_piercer", name = "방천화극", force = 20, intelligence = 0, politics = 0, hp = 0 }
+  check(GameState.statBonus(o, "might") == 20, "force→무력 보너스 매핑")
+  check(GameState.effectiveStat(o, "might") == 90, "유효 무력 = 70+20")
+  check(GameState.hasStatBonus(o, "might") == true, "무력 보너스 표시 O")
+  check(GameState.hasStatBonus(o, "intel") == false, "지력 보너스 없음")
+
+  -- 음수 보너스(패널티)는 hasStatBonus(+판별) false.
+  o.equip = { force = 0, intelligence = -2, politics = 0, hp = 0 }
+  check(GameState.statBonus(o, "intel") == -2, "패널티 보너스 음수")
+  check(GameState.effectiveStat(o, "intel") == 58, "유효 지력 = 60-2")
+  check(GameState.hasStatBonus(o, "intel") == false, "패널티는 +표시 아님")
+end
+
+-- ── 초기 장비 배치 + 장비 선물 이전 (GDD 8·15장) ─────────
+do
+  local S = GameState.STATE
+  local sc = game_data.scenarios[3] -- three_kingdoms (wei/shu/wu)
+  local officers = GameState.buildOfficers(game_data, sc)
+  local inv = GameState.applyInitialEquipment(game_data, sc, officers)
+
+  -- 221 위(caopi) 군주에게 bronze_sparrow(구리 참새)가 미장착으로 귀속.
+  check(inv.wei and #inv.wei == 1, "초기 장비: 위 장비고 1개")
+  check(inv.wei[1].name == "구리 참새", "초기 장비: 위 = 구리 참새")
+  -- 미장착이므로 군주는 아직 장착 안 함.
+  local caopi = GameState.byId(officers, "caopi")
+  check(caopi.equip == nil, "초기 장비: 미장착(군주 equip 없음)")
+
+  -- 장비 선물: 위 세력 비수장 장수에게 이전.
+  local target = nil
+  for _, o in ipairs(officers) do
+    if o.faction == "wei" and not o.isLord and o.state == S.active then target = o; break end
+  end
+  check(target ~= nil, "위 세력 비수장 장수 존재")
+  check(GameState.canGiftEquip(target) == true, "canGiftEquip 정상")
+
+  local loy0 = target.loyalty or 0
+  local item = inv.wei[1]
+  GameState.applyGiftEquip(inv.wei, 1, target)
+  check(#inv.wei == 0, "장비 선물: 장비고에서 제거")
+  check(target.equip == item, "장비 선물: 대상에게 장착")
+  check(target.loyalty == loy0 + config.gift.loyaltyPerEquip, "장비 선물: 충성 상승")
+  check(target.giftedEquipThisTurn == true, "장비 선물: 턴 플래그 set")
+  -- 이전 직후 유효 능력치에 보너스 반영(구리 참새 politics=12 → 정치 +12).
+  check(GameState.statBonus(target, "pol") == 12, "장비 선물 후 정치 보너스 반영")
+  check(GameState.hasStatBonus(target, "pol") == true, "장비 선물 후 정치 연두 판별")
+
+  -- 이미 장착 → canGiftEquip 불가(1장수 1장착).
+  check(GameState.canGiftEquip(target) == false, "이미 장착 → 장비 선물 불가")
+  -- 수장 → 불가.
+  check(GameState.canGiftEquip({ isLord = true }) == false, "수장 → 장비 선물 불가")
 end
 
 -- ── 결과 ─────────────────────────────────────────────────

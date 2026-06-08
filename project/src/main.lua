@@ -43,6 +43,8 @@ local state = {
   -- 플레이어(군주) 정보 — 세력 선택 후 확정.
   playerFactionId = nil, -- 플레이어 세력 id (흰 테두리·선물 게이팅 기준)
   gold = 0,              -- 플레이어 군주 금 보유고(GDD 9장). 금 선물로 차감.
+  governors = nil,       -- 태수 맵 { [regionId]=officerId } (GameState.assignGovernors)
+  factionInventory = nil,-- 세력별 미장착 장비고 { [fid]={장비,...} } (장비 선물 대상)
   -- 팝업 UI 상태(지도 화면). draw 는 읽기만, 변경은 입력 콜백.
   listOpen = false,   -- 장수 목록 팝업 열림 여부
   detailId = nil,     -- 상세 보는 장수 id (nil=목록만)
@@ -475,12 +477,19 @@ end
 
 --- 시나리오를 골라 지도 화면으로 전환.
 -- @param idx number  game_data.scenarios 인덱스
+-- 태수 동률 선정용 rng. love.math.random(n): 1..n 정수(시드 있는 LÖVE 난수).
+--   game_state 는 love 비의존이라 rng 를 "주입"받는다(테스트는 고정 rng 사용).
+local function rng(n) return love.math.random(n) end
+
 local function startScenario(idx)
   state.scenario = game_data.scenarios[idx]
   state.selectedId = nil
   -- 턴 상태(시작 연/월) + 런타임 장수 구성.
   state.turn = GameState.newTurn(state.scenario)
   state.officers = GameState.buildOfficers(game_data, state.scenario)
+  -- 초기 장비 적용(군주 귀속 미장착 장비고) + 지역별 태수 자동 선정(GDD 5·8장).
+  state.factionInventory = GameState.applyInitialEquipment(game_data, state.scenario, state.officers)
+  state.governors = GameState.assignGovernors(state.regions, state.officers, rng)
   -- 시나리오 진입 후엔 "세력(군주) 선택" 단계로(GDD 3장 흐름 2번).
   state.scene = "faction"
 end

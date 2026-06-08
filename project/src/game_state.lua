@@ -270,9 +270,182 @@ function GameState.applyGiftGold(gold, officer, amount)
   return gold - amount
 end
 
--- 장비 선물(GDD 8·15장)은 이번 범위 밖(스텁). 장비 데이터가 생기면 구현.
---   UI 는 이 플래그를 보고 장비 선물 버튼을 비활성으로 둔다.
-GameState.EQUIP_IMPLEMENTED = false
+-- ── 장비 시스템 (GDD 8장) ────────────────────────────────
+--   장비(game_data.items)는 정적 베이스. 런타임 상태:
+--     · officer.equip = 장착한 장비 레코드(없으면 nil). 1장수 1장착.
+--     · 군주 보유 "미장착" 장비고 = 세력별 리스트(선물 대상).
+--   장비 보너스 필드 키(force/intelligence/politics/hp)는 장수 능력치 키와 달라 매핑한다.
+GameState.EQUIP_IMPLEMENTED = true
+
+-- 장수 능력치 키 → 장비 보너스 필드 키 매핑(데이터가 서로 다른 이름을 써서 변환).
+--   (Lua 테이블 상수 = C# 의 const Dictionary 같은 룩업표)
+local STAT_TO_ITEM = { might = "force", intel = "intelligence", pol = "politics", hp = "hp" }
+
+--- 장착 장비가 특정 능력치에 주는 보너스(없으면 0). 음수면 패널티.
+-- @param officer table   런타임 장수(officer.equip 참조)
+-- @param statKey string  "might"|"intel"|"pol"|"hp"
+-- @return number
+function GameState.statBonus(officer, statKey)
+  local e = officer.equip
+  if not e then return 0 end
+  local itemKey = STAT_TO_ITEM[statKey]
+  return e[itemKey] or 0
+end
+
+--- 유효 능력치 = 기본 + 장비 보너스 (표시·계산에 이 값을 쓴다, GDD 8장).
+-- @param officer table
+-- @param statKey string
+-- @return number
+function GameState.effectiveStat(officer, statKey)
+  return (officer[statKey] or 0) + GameState.statBonus(officer, statKey)
+end
+
+--- 그 능력치에 "양(+)의 장비 보너스"가 붙었는지(연두색 표시 판별용). 표시 전용.
+-- @return boolean
+function GameState.hasStatBonus(officer, statKey)
+  return GameState.statBonus(officer, statKey) > 0
+end
+
+--- 시나리오 초기 장비를 적용한다 (GDD 8장).
+-- 흐름: scenario.equipment{ id, owner, equipped? } → items 베이스 조회 →
+--   equipped 면 군주(owner)에게 장착(officer.equip), 아니면 그 세력 "미장착 장비고"에 적재.
+-- 부작용: 해당 owner 장수의 equip 설정(장착분). 새 장비고 테이블 반환(원본 불변).
+-- @param gameData table  items 보유
+-- @param scenario table  equipment 배치 + factions
+-- @param officers table  런타임 장수(buildOfficers 결과; owner 의 faction 확인용)
+-- @return table  factionInventory = { [factionId] = { 장비레코드, ... } }  (미장착·선물용)
+function GameState.applyInitialEquipment(gameData, scenario, officers)
+  local itemById = {}
+  for _, it in ipairs(gameData.items) do itemById[it.id] = it end
+  local offById = {}
+  for _, o in ipairs(officers) do offById[o.id] = o end
+
+  local inventory = {}
+  for _, place in ipairs(scenario.equipment or {}) do
+    local base = itemById[place.id]
+    local owner = offById[place.owner]
+    if base and owner then
+      -- 장비 인스턴스(베이스의 얕은 복사) — 같은 베이스로 여러 자루가 생겨도 서로 독립.
+      local rec = { id = base.id, name = base.name,
+                    hp = base.hp, force = base.force,
+                    intelligence = base.intelligence, politics = base.politics }
+      if place.equipped then
+        owner.equip = rec
+      else
+        local fid = owner.faction
+        inventory[fid] = inventory[fid] or {}
+        table.insert(inventory[fid], rec)
+      end
+    end
+  end
+  return inventory
+end
+
+--- 장비 선물이 가능한지(버튼 활성/실행 전 판정). 순수 함수.
+-- 조건: 수장 아님 / 이번 턴 장비 선물 안 함 / 빈 장착칸(1장수 1장착, GDD 8장).
+-- @param officer table
+-- @return boolean ok, string|nil reason
+function GameState.canGiftEquip(officer)
+  if officer.isLord then return false, "수장은 선물 대상 아님" end
+  if officer.giftedEquipThisTurn then return false, "이번 턴 이미 장비 선물함" end
+  if officer.equip then return false, "이미 장비 장착 중(1장수 1장착)" end
+  return true, nil
+end
+
+--- 군주 장비고의 한 장비를 대상 장수에게 이전(장착)한다 (GDD 8·15장).
+-- 보너스 이전 = 장비를 officer.equip 에 꽂으면 유효 능력치에 자동 반영(effectiveStat).
+-- 부작용: inventory 에서 제거, officer.equip 설정, 충성 상승(클램프), 턴 플래그.
+-- @param inventory table  군주 미장착 장비고(이 리스트에서 제거)
+-- @param index number     선물할 장비의 인덱스
+-- @param officer table    대상 장수(변경됨; canGiftEquip 통과 가정)
+-- @return table  이전된 장비 레코드
+function GameState.applyGiftEquip(inventory, index, officer)
+  -- table.remove(t, i): i 번째 요소 제거하고 반환. C# List.RemoveAt + 반환.
+  local rec = table.remove(inventory, index)
+  officer.equip = rec
+  local cur = officer.loyalty or 0
+  officer.loyalty = math.min(config.officer.maxLoyalty, cur + config.gift.loyaltyPerEquip)
+  officer.giftedEquipThisTurn = true
+  return rec
+end
+
+-- 포로 동반/처형 귀속(GDD 8·14장)은 이번 범위 밖 → 훅만(미구현).
+--   TODO: 포획 시 장비 동반, 처형 시 장비는 군주 장비고로 귀속.
+
+-- ── 태수 (GDD 5·10·11장) ─────────────────────────────────
+--   지역마다 담당 장수(태수) 1명. 내정·훈련 수행 장수의 기본 후보.
+--   자동 선정: 수장 고정 → 없으면 최고 충성도 → 동률이면 랜덤(주입 rng 로 테스트 가능).
+
+--- 랜덤 1..n 정수를 돌려준다(주입 rng 우선, 없으면 math.random).
+--   love.* 비의존: rng 를 주입하면 시드 고정 테스트 가능(love.math.random 도 주입 가능).
+local function pick(rng, n)
+  if rng then return rng(n) end
+  return math.random(n) -- math.random(n): 1..n 정수 (C 의 rand()%n+1 과 유사)
+end
+
+--- 한 지역의 태수를 자동 선정한다 (GDD 5장 태수 필드).
+-- 규칙(왜 이렇게):
+--   1) 후보 = 그 지역에 있는 active 장수. (포로/재야/이동중 제외)
+--   2) 수장(군주)이 있으면 무조건 그 수장 — 세력의 주인이 곧 거점의 장(고정).
+--   3) 수장이 없으면 충성도 최고 — 가장 믿을 장수에게 맡긴다.
+--   4) 최고 충성 동률이 여럿이면 그 그룹에서 랜덤 1명.
+--   5) 후보 0명이면 태수 없음(nil).
+-- @param officers table   런타임 장수 전체
+-- @param regionId string  대상 지역
+-- @param rng function|nil 1..n 정수 반환(테스트 주입). 없으면 math.random.
+-- @return string|nil  태수 장수 id (없으면 nil)
+function GameState.assignGovernor(officers, regionId, rng)
+  local bestLoyalty, ties = -1, {}
+  for _, o in ipairs(officers) do
+    if o.region == regionId and o.state == GameState.STATE.active then
+      if o.isLord then
+        return o.id -- 수장 발견 → 즉시 고정(2번 규칙)
+      end
+      local loy = o.loyalty or 0
+      if loy > bestLoyalty then
+        bestLoyalty = loy
+        ties = { o.id }       -- 새 최고 → 동률 그룹 초기화
+      elseif loy == bestLoyalty then
+        ties[#ties + 1] = o.id -- 동률 누적
+      end
+    end
+  end
+  if #ties == 0 then return nil end       -- 후보 0명
+  if #ties == 1 then return ties[1] end   -- 단독 최고
+  return ties[pick(rng, #ties)]           -- 동률 랜덤(4번 규칙)
+end
+
+--- 모든 지역의 태수를 한 번에 자동 선정한다(시나리오 초기 1회).
+-- @param regions table   지역 목록(각 .id)
+-- @param officers table  런타임 장수
+-- @param rng function|nil
+-- @return table  { [regionId] = officerId|nil }  (governors 맵)
+function GameState.assignGovernors(regions, officers, rng)
+  local governors = {}
+  for _, r in ipairs(regions) do
+    governors[r.id] = GameState.assignGovernor(officers, r.id, rng)
+  end
+  return governors
+end
+
+--- 이 장수가 태수로 있는 지역 id 를 찾는다(상세 표시용 역조회).
+-- @param governors table  { [regionId]=officerId }
+-- @param officerId string
+-- @return string|nil  지역 id
+function GameState.governorRegionOf(governors, officerId)
+  for regionId, oid in pairs(governors) do
+    if oid == officerId then return regionId end
+  end
+  return nil
+end
+
+--- 수동 태수 지정이 가능한지(같은 지역 active 장수만).
+-- @param officer table     대상 장수
+-- @param regionId string   지정하려는 지역
+-- @return boolean
+function GameState.canSetGovernor(officer, regionId)
+  return officer.region == regionId and officer.state == GameState.STATE.active
+end
 
 -- ── 턴/달력 (GDD 3·9장) ──────────────────────────────────
 --   1턴 = 1개월. 12월 다음은 다음 해 1월.

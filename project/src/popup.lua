@@ -62,15 +62,61 @@ local function officerRows(state, px, py, pw)
   return rows
 end
 
---- 장수 상세의 액션 버튼(금 선물 / 장비 선물). 팝업 하단 2분할.
--- @return table goldBtn, table equipBtn
+-- 장비 보너스 필드(force/intelligence/politics/hp) → 한글 능력치 라벨.
+--   data 의 키 이름과 표시 라벨을 한 곳에서 매핑(매직 문자열 분산 방지).
+local ITEM_FIELDS = {
+  { f = "force", label = "무력" }, { f = "intelligence", label = "지력" },
+  { f = "politics", label = "정치" }, { f = "hp", label = "체력" },
+}
+
+--- 장비의 보너스 내역 문자열(예: "무력 +18, 지력 +4"). 0 은 생략, 음수는 그대로.
+local function itemBonusText(item)
+  local parts = {}
+  for _, e in ipairs(ITEM_FIELDS) do
+    local v = item[e.f] or 0
+    if v ~= 0 then
+      parts[#parts + 1] = e.label .. (v > 0 and (" +" .. v) or (" " .. v))
+    end
+  end
+  return #parts > 0 and table.concat(parts, ", ") or "보너스 없음"
+end
+
+--- 능력치 표시 색: 장비 보너스 +면 연두, −면 빨강, 없으면 기본(GDD 8장).
+--   draw 는 "조회"만(계산은 game_state.statBonus). 색 선택만 표현 계층 책임.
+local function statColor(o, statKey)
+  local b = GameState.statBonus(o, statKey)
+  if b > 0 then return config.colors.statBonus end
+  if b < 0 then return config.colors.statPenalty end
+  return config.colors.text
+end
+
+--- 장수 상세의 액션 버튼(태수 지정/해제, 금 선물, 장비 선물).
+-- 하단: [태수](전폭) 위에 / [금 선물][장비 선물](2분할). 라벨은 draw 에서 상태 따라 덮어씀.
+-- @return table govBtn, table goldBtn, table equipBtn
 local function detailButtons(px, py, pw, ph)
   local pad, bh = config.popup.pad, config.popup.buttonHeight
-  local y = py + ph - pad - bh
-  local w = (pw - pad * 2 - 12) / 2
-  local goldBtn = UI.newButton(px + pad, y, w, bh, "금 선물", "gold")
-  local equipBtn = UI.newButton(px + pad + w + 12, y, w, bh, "장비 선물 (미구현)", "equip")
-  return goldBtn, equipBtn
+  local w2 = (pw - pad * 2 - 12) / 2
+  local yGifts = py + ph - pad - bh
+  local yGov = yGifts - bh - 8
+  local govBtn = UI.newButton(px + pad, yGov, pw - pad * 2, bh, "태수 지정", "gov")
+  local goldBtn = UI.newButton(px + pad, yGifts, w2, bh, "금 선물", "gold")
+  local equipBtn = UI.newButton(px + pad + w2 + 12, yGifts, w2, bh, "장비 선물", "equip")
+  return govBtn, goldBtn, equipBtn
+end
+
+--- 장비 선물 서브팝업의 장비 목록(군주 미장착 장비고). draw·클릭 공유.
+-- @return table  UI 버튼 배열(value = 장비고 인덱스)
+local function equipRows(state, px, py, pw)
+  local rows = {}
+  local inv = state.factionInventory and state.factionInventory[state.playerFactionId]
+  if not inv then return rows end
+  local pad, rh, rg = config.popup.pad, config.popup.rowHeight, config.popup.rowGap
+  local x, y0, w = px + pad, py + pad + 46, pw - pad * 2
+  for i, it in ipairs(inv) do
+    rows[i] = UI.newButton(x, y0 + (i - 1) * (rh + rg), w, rh,
+      it.name .. "  (" .. itemBonusText(it) .. ")", i)
+  end
+  return rows
 end
 
 --- 금 선물 서브팝업의 버튼(−, +, 확정).
@@ -126,44 +172,84 @@ local function drawOfficerList(state, px, py, pw)
   end
 end
 
+-- 능력치 표시용(키 + 라벨). 무력/지력/정치/체력.
+local STAT_VIEW = {
+  { k = "might", label = "무력" }, { k = "intel", label = "지력" },
+  { k = "pol", label = "정치" }, { k = "hp", label = "체력" },
+}
+
+local DISABLED = { text = { 0.5, 0.52, 0.58 }, border = { 0.3, 0.31, 0.36 } }
+
 --- 장수 상세 팝업 본문(GDD 7·8장 표시 항목).
 local function drawOfficerDetail(state, px, py, pw, ph)
   local o = detailOfficer(state)
   if not o then return end
   local pad, gap = config.popup.pad, config.popup.lineGap
   local x, y = px + pad, py + pad
+  local mx, my = love.mouse.getPosition()
 
   love.graphics.setColor(config.colors.text)
   love.graphics.print(o.name .. (o.isLord and "  (군주)" or ""), x, y); y = y + gap + 4
 
-  -- GDD 7장 능력치/상태.
-  love.graphics.print(string.format("무력 %d   지력 %d   정치 %d   체력 %d",
-    o.might, o.intel, o.pol, o.hp), x, y); y = y + gap
+  -- GDD 7·8장: 능력치는 유효치(기본+장비). 보너스 붙은 스탯만 색 강조.
+  --   스탯마다 색이 달라 한 칸씩(열) 따로 그린다. love.graphics.print 는 setColor 직전 색을 쓴다.
+  local colW = 130
+  for i, s in ipairs(STAT_VIEW) do
+    love.graphics.setColor(statColor(o, s.k))
+    love.graphics.print(s.label .. " " .. GameState.effectiveStat(o, s.k), x + (i - 1) * colW, y)
+  end
+  love.graphics.setColor(config.colors.text)
+  y = y + gap
+
   love.graphics.print("충성도: " .. tostring(GameState.loyaltyText(o)), x, y); y = y + gap
   love.graphics.print("보유 병력: " .. (o.troops or 0), x, y); y = y + gap
   love.graphics.print("소속 세력: " .. officerFactionName(state, o), x, y); y = y + gap
   local r = o.region and Region.byId(state.regions, o.region)
   love.graphics.print("위치 지역: " .. (r and r.name or "-"), x, y); y = y + gap
-  love.graphics.print("상태: " .. (STATE_KR[o.state] or o.state), x, y); y = y + gap + 6
+  love.graphics.print("상태: " .. (STATE_KR[o.state] or o.state), x, y); y = y + gap
 
-  -- GDD 8장 장비(미구현 스텁).
-  love.graphics.print("보유 장비: " .. (o.equip and o.equip.name or "없음"), x, y); y = y + gap
+  -- 태수 여부(GDD 5장): 이 장수가 태수로 있는 지역 역조회.
+  local govRegion = state.governors and GameState.governorRegionOf(state.governors, o.id)
+  local govReg = govRegion and Region.byId(state.regions, govRegion)
+  love.graphics.print("태수: " .. (govReg and govReg.name or "—"), x, y); y = y + gap + 6
 
-  -- 선물 버튼: 플레이어 세력 소속 장수에게만 노출(GDD 15장).
-  if GameState.isGiftTarget(o, state.playerFactionId) then
-    local mx, my = love.mouse.getPosition()
-    local goldBtn, equipBtn = detailButtons(px, py, pw, ph)
-    -- 금 선물: 이번 턴 이미 선물했으면 비활성.
-    if o.giftedGoldThisTurn then
-      UI.draw(goldBtn, { text = { 0.5, 0.52, 0.58 }, border = { 0.3, 0.31, 0.36 } })
-    else
-      UI.draw(goldBtn, { hovered = UI.hit(goldBtn, mx, my), accent = config.colors.selectBorder })
-    end
-    -- 장비 선물: 항상 비활성(장비 미구현, GameState.EQUIP_IMPLEMENTED=false).
-    UI.draw(equipBtn, { text = { 0.5, 0.52, 0.58 }, border = { 0.3, 0.31, 0.36 } })
+  -- GDD 8장 장비: 장비명 + 보너스 내역(없으면 "없음").
+  if o.equip then
+    love.graphics.print("보유 장비: " .. o.equip.name .. "  (" .. itemBonusText(o.equip) .. ")", x, y)
   else
+    love.graphics.print("보유 장비: 없음", x, y)
+  end
+  y = y + gap
+
+  -- 액션 버튼: 플레이어 세력 active 장수에게만 노출(GDD 8·15장).
+  local isPlayer = (o.faction == state.playerFactionId) and (o.state == GameState.STATE.active)
+  if not isPlayer then
     love.graphics.setColor(0.7, 0.72, 0.78)
-    love.graphics.print("(플레이어 세력 장수만 선물 가능)", x, py + ph - pad - 24)
+    love.graphics.print("(플레이어 세력 장수만 태수/선물 가능)", x, py + ph - pad - 24)
+    return
+  end
+
+  local govBtn, goldBtn, equipBtn = detailButtons(px, py, pw, ph)
+
+  -- 태수 지정/해제: 이미 이 지역 태수면 "해제", 아니면 "지정".
+  local isGovHere = state.governors and state.governors[o.region] == o.id
+  govBtn.label = isGovHere and "태수 해제" or "태수 지정"
+  UI.draw(govBtn, { hovered = UI.hit(govBtn, mx, my), accent = config.colors.selectBorder })
+
+  -- 금 선물(수장 제외 / 턴 1회).
+  if GameState.isGiftTarget(o, state.playerFactionId) and not o.giftedGoldThisTurn then
+    UI.draw(goldBtn, { hovered = UI.hit(goldBtn, mx, my), accent = config.colors.selectBorder })
+  else
+    UI.draw(goldBtn, DISABLED)
+  end
+
+  -- 장비 선물(수장 제외 / 빈 장착칸 / 턴 1회 / 군주 장비고 비어있지 않음).
+  local inv = state.factionInventory and state.factionInventory[state.playerFactionId]
+  local equipOk = GameState.canGiftEquip(o) and inv and #inv > 0
+  if equipOk then
+    UI.draw(equipBtn, { hovered = UI.hit(equipBtn, mx, my), accent = config.colors.selectBorder })
+  else
+    UI.draw(equipBtn, DISABLED)
   end
 end
 
@@ -204,6 +290,26 @@ local function drawGiftGold(state, px, py, pw, ph)
   end
 end
 
+--- 장비 선물 서브팝업 본문(GDD 8·15장). 군주 장비고에서 골라 클릭하면 이전.
+local function drawGiftEquip(state, px, py, pw)
+  local o = detailOfficer(state)
+  if not o then return end
+  local pad = config.popup.pad
+  love.graphics.setColor(config.colors.text)
+  love.graphics.print("장비 선물 — " .. o.name, px + pad, py + pad)
+
+  local mx, my = love.mouse.getPosition()
+  local rows = equipRows(state, px, py, pw)
+  if #rows == 0 then
+    love.graphics.setColor(0.7, 0.72, 0.78)
+    love.graphics.print("군주 보유(미장착) 장비가 없습니다.", px + pad, py + pad + 50)
+    return
+  end
+  for _, btn in ipairs(rows) do
+    UI.draw(btn, { hovered = UI.hit(btn, mx, my), accent = config.colors.selectBorder })
+  end
+end
+
 --- 팝업 디스패처(모달). 열린 게 없으면 아무것도 안 그림. (읽기 전용)
 -- @param state table  main 의 게임/UI 상태
 function Popup.draw(state)
@@ -215,6 +321,8 @@ function Popup.draw(state)
 
   if state.sub == "gold" then
     drawGiftGold(state, px, py, pw, ph)
+  elseif state.sub == "equip" then
+    drawGiftEquip(state, px, py, pw)
   elseif state.detailId then
     drawOfficerDetail(state, px, py, pw, ph)
   else
@@ -263,19 +371,56 @@ function Popup.consumeClick(state, x, y)
     return true
   end
 
-  if state.detailId then
-    -- 장수 상세: X=목록으로 / 금 선물 버튼 = 서브팝업 열기.
+  if state.sub == "equip" then
+    -- 장비 선물 서브팝업: X=서브 닫기 / 장비 클릭 = 그 장비 이전(장착).
     if UI.hit(cb, x, y) then
-      state.detailId = nil
+      state.sub = nil
     else
       local o = detailOfficer(state)
-      if o and GameState.isGiftTarget(o, state.playerFactionId) and not o.giftedGoldThisTurn then
-        local goldBtn = detailButtons(px, py, pw, ph)
-        if UI.hit(goldBtn, x, y) then
-          state.sub = "gold"; state.giftAmount = 1; state.notice = nil
+      local inv = state.factionInventory and state.factionInventory[state.playerFactionId]
+      if o and inv and GameState.canGiftEquip(o) then
+        for _, btn in ipairs(equipRows(state, px, py, pw)) do
+          if UI.hit(btn, x, y) then
+            -- 규칙은 game_state(장비 이전 + 충성 상승). btn.value = 장비고 인덱스.
+            GameState.applyGiftEquip(inv, btn.value, o)
+            state.sub = nil
+            break
+          end
         end
       end
-      -- 장비 선물 버튼은 비활성(미구현) → 클릭 무시.
+    end
+    return true
+  end
+
+  if state.detailId then
+    -- 장수 상세: X=목록으로 / 태수 지정·해제 / 금·장비 선물 서브팝업 열기.
+    if UI.hit(cb, x, y) then
+      state.detailId = nil
+      return true
+    end
+    local o = detailOfficer(state)
+    local isPlayer = o and (o.faction == state.playerFactionId) and (o.state == GameState.STATE.active)
+    if isPlayer then
+      local govBtn, goldBtn, equipBtn = detailButtons(px, py, pw, ph)
+      if UI.hit(govBtn, x, y) then
+        -- 태수 토글: 이미 이 지역 태수면 해제, 아니면 지정(같은 지역 active 만).
+        if GameState.canSetGovernor(o, o.region) then
+          if state.governors[o.region] == o.id then
+            state.governors[o.region] = nil
+          else
+            state.governors[o.region] = o.id
+          end
+        end
+      elseif UI.hit(goldBtn, x, y) then
+        if GameState.isGiftTarget(o, state.playerFactionId) and not o.giftedGoldThisTurn then
+          state.sub = "gold"; state.giftAmount = 1; state.notice = nil
+        end
+      elseif UI.hit(equipBtn, x, y) then
+        local inv = state.factionInventory and state.factionInventory[state.playerFactionId]
+        if GameState.canGiftEquip(o) and inv and #inv > 0 then
+          state.sub = "equip"; state.notice = nil
+        end
+      end
     end
     return true
   end

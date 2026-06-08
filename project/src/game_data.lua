@@ -286,6 +286,45 @@ game_data.officers = {
   { id = "wangcan",    name = "왕찬",   might = 15, intel = 82, pol = 76, hp = 60, appear = 200 },
 }
 
+-- ── 장비 베이스 데이터 (GDD 8장) ─────────────────────────
+--   정적 데이터: id, 이름, 능력치 보너스(hp/force/intelligence/politics).
+--     · 보너스 필드 키는 장수 능력치 키와 다르므로 game_state 에서 매핑한다:
+--         force → 무력(might), intelligence → 지력(intel), politics → 정치(pol), hp → 체력(hp)
+--     · 값이 음수면 패널티(예: 대부 intelligence=-2). 0/생략은 변화 없음.
+--   장비의 "장착/귀속/선물"은 런타임 상태(game_state) — 베이스엔 소유 정보 없음.
+--   고증 톤(CLAUDE): 실제 삼국지 명품/보물류.
+game_data.items = {
+    { id = "twin_swords", name = "자웅일대검", hp = 0, force = 12, intelligence = 4, politics = 4 },
+    { id = "green_dragon", name = "청룡언월도", hp = 0, force = 18, intelligence = 0, politics = 0 },
+    { id = "serpent_spear", name = "장팔사모", hp = 8, force = 17, intelligence = 0, politics = 0 },
+    { id = "seven_star", name = "칠성검", hp = 0, force = 10, intelligence = 8, politics = 4 },
+    { id = "sky_piercer", name = "방천화극", hp = 0, force = 20, intelligence = 0, politics = 0 },
+    { id = "heaven_sword", name = "의천검", hp = 0, force = 14, intelligence = 6, politics = 6 },
+    { id = "seven_chi_spear", name = "칠척사모", hp = 6, force = 13, intelligence = 0, politics = 0 },
+    { id = "ancient_blade", name = "고정도", hp = 0, force = 12, intelligence = 2, politics = 0 },
+    { id = "twin_halberds", name = "쌍철극", hp = 6, force = 15, intelligence = 0, politics = 0 },
+    { id = "great_axe", name = "대부", hp = 10, force = 14, intelligence = -2, politics = 0 },
+    { id = "red_hare", name = "적토마", hp = 20, force = 12, intelligence = 0, politics = 0 },
+    { id = "dilu", name = "적로", hp = 18, force = 6, intelligence = 4, politics = 0 },
+    { id = "zhaohuang_feidian", name = "조황비전", hp = 16, force = 8, intelligence = 0, politics = 2 },
+    { id = "dunjia_heaven", name = "둔갑천서 천권", hp = 0, force = 0, intelligence = 16, politics = 4 },
+    { id = "dunjia_earth", name = "둔갑천서 지권", hp = 0, force = 0, intelligence = 14, politics = 6 },
+    { id = "dunjia_man", name = "둔갑천서 인권", hp = 0, force = 0, intelligence = 12, politics = 8 },
+    { id = "taiping_book", name = "태평요술서", hp = 0, force = 0, intelligence = 18, politics = 4 },
+    { id = "war_manual", name = "손자병법서", hp = 0, force = 4, intelligence = 14, politics = 8 },
+    { id = "mengde_book", name = "맹덕신서", hp = 0, force = 6, intelligence = 12, politics = 10 },
+    { id = "qinggang_sword", name = "청공검", hp = 0, force = 15, intelligence = 4, politics = 0 },
+    { id = "jade_seal", name = "옥새", hp = 0, force = 0, intelligence = 4, politics = 18 },
+    { id = "calendar_pearl", name = "건상력주", hp = 0, force = 0, intelligence = 8, politics = 14 },
+    { id = "bronze_sparrow", name = "구리 참새", hp = 0, force = 0, intelligence = 4, politics = 12 },
+    { id = "three_point_blade", name = "삼첨양인도", hp = 4, force = 16, intelligence = 0, politics = 0 },
+    { id = "meteor_hammer", name = "유성추", hp = 8, force = 13, intelligence = 0, politics = 0 },
+    { id = "crane_fan", name = "학우선", hp = 0, force = 0, intelligence = 15, politics = 6 },
+    { id = "mourning_spear", name = "애각창", hp = 6, force = 14, intelligence = 0, politics = 0 },
+    { id = "shu_map", name = "서촉지형도", hp = 0, force = 0, intelligence = 8, politics = 12 },
+    { id = "nanman_map", name = "평만지장도", hp = 0, force = 0, intelligence = 10, politics = 10 },
+}
+
 -- ── 시나리오 (배열 순서 = 선택 화면 표시 순서) ────────────
 game_data.scenarios = {
   -- ① 184 황건의 난 — 황건적 vs 각지 군벌(게임적 허용으로 군웅 배치, 한 관군 제외)
@@ -322,6 +361,19 @@ game_data.scenarios = {
       -- 손견(강동 부춘 출신 + 형남)
       changsha = "sunjian", wuling = "sunjian", jiangling = "sunjian", xiangyang = "sunjian",
       jianye = "sunjian", wujun = "sunjian", kuaiji = "sunjian", chaisang = "sunjian",
+    },
+    -- 초기 장비 배치 (GDD 8장). 각 항목: 장비 id → owner(그 세력 군주 장수 id).
+    --   equipped 미지정(=false) → 군주 "미장착" 장비고에 들어가 선물 대상이 된다.
+    --   "시작 장비는 해당 세력 군주에게 귀속"(GDD 8장)을 군주 인벤토리로 표현.
+    equipment = {
+      { id = "taiping_book",  owner = "zhangjiao"  }, -- 장각: 태평요술서
+      { id = "sky_piercer",   owner = "dongzhuo"   }, -- 동탁 진영: 방천화극
+      { id = "meteor_hammer", owner = "mateng"     },
+      { id = "shu_map",       owner = "liuyan"     }, -- 익주
+      { id = "war_manual",    owner = "hejin"      },
+      { id = "ancient_blade", owner = "dingyuan"   },
+      { id = "red_hare",      owner = "gongsunzan" }, -- 백마장군
+      { id = "jade_seal",     owner = "sunjian"    }, -- 손견: 옥새(고증)
     },
     -- 장수 초기 배치 (GDD 4·7장). 각 항목: 장수 id → 소속/위치/충성/상태.
     --   state="active": 세력 소속 → region 은 반드시 그 faction 소유 지역(위 ownership).
@@ -415,6 +467,20 @@ game_data.scenarios = {
       jianye = "sunce", wujun = "sunce", kuaiji = "sunce", chaisang = "sunce",
       chengdu = "liuzhang", jiangzhou = "liuzhang", yunnan = "liuzhang",
       hanzhong = "zhanglu",
+    },
+    -- 초기 장비 배치 (GDD 8장). 군주 귀속 미장착 장비고(선물 대상). owner = 세력 군주.
+    equipment = {
+      { id = "calendar_pearl",  owner = "yuanshao"   },
+      { id = "red_hare",        owner = "gongsunzan" },
+      { id = "mengde_book",     owner = "caocao"     }, -- 조조: 맹덕신서(고증)
+      { id = "dilu",            owner = "liubei"     }, -- 유비: 적로(고증)
+      { id = "great_axe",       owner = "lijue"      },
+      { id = "meteor_hammer",   owner = "mateng"     },
+      { id = "jade_seal",       owner = "yuanshu"    }, -- 원술: 옥새(고증)
+      { id = "seven_chi_spear", owner = "liubiao"    },
+      { id = "twin_swords",     owner = "sunce"      }, -- 손책: 자웅일대검(고증)
+      { id = "shu_map",         owner = "liuzhang"   }, -- 익주
+      { id = "dunjia_man",      owner = "zhanglu"    }, -- 오두미도
     },
     -- 장수 초기 배치 (GDD 4·7장). 184 의 무명 영웅들이 이제 각 세력에 자리잡았다.
     officers = {
@@ -536,6 +602,12 @@ game_data.scenarios = {
       -- 오: 강동
       jianye = "wu", chaisang = "wu", wujun = "wu", kuaiji = "wu",
       -- 나머지(무위·천수·하비·팽성·신야·양양·광릉·강릉·무릉·장사)는 중립(미기재)
+    },
+    -- 초기 장비 배치 (GDD 8장). 군주 귀속 미장착 장비고(선물 대상). owner = 세력 군주.
+    equipment = {
+      { id = "bronze_sparrow", owner = "caopi"   }, -- 위: 동작대(구리 참새)
+      { id = "dilu",           owner = "liubei"  }, -- 촉: 적로(고증)
+      { id = "ancient_blade",  owner = "sunquan" }, -- 오: 고정도(손견 유물)
     },
     -- 장수 초기 배치 (GDD 4·7장). 삼국 정립기 — 1세대 군웅은 떠나고 위·촉·오 3국이 굳었다.
     --   변경 중립 지역(무위·천수·하비 등)은 장수 없이 비어 있을 수 있다(GDD: 지역 0명 허용).
