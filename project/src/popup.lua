@@ -14,8 +14,9 @@ popup.lua — 장수 팝업(목록/상세) + 선물 서브팝업 (표현·입력
     - 800줄 규칙(CLAUDE.md)에 따라 main 에서 팝업 책임을 떼어낸 모듈.
 
   state 의존 필드(주입):
-    listOpen, detailId, sub("gold"), giftAmount, notice,
-    selectedId, officers, regions, scenario, playerFactionId, gold
+    listOpen, regionInfoOpen, detailId, sub("gold"|"equip"), giftAmount, notice,
+    selectedId, officers, regions, scenario, playerFactionId,
+    regionState(지역 금·군량·내부수치), governors(태수), factionInventory(장비고)
 --]]
 
 local config = require("config")
@@ -135,6 +136,13 @@ end
 --- 상세를 보고 있는 런타임 장수(없으면 nil).
 local function detailOfficer(state)
   return state.detailId and GameState.byId(state.officers, state.detailId) or nil
+end
+
+--- 금 선물이 차감하는 풀 = "군주가 위치한 지역"의 런타임 지역 레코드(없으면 nil).
+--   금 진실원본은 지역별 보유(GDD 9장) → 세력 금고가 아니라 군주 소재 지역 금에서 뺀다.
+local function lordRegion(state)
+  local rid = GameState.lordRegionId(state.officers, state.playerFactionId, state.scenario)
+  return rid and state.regionState and state.regionState[rid] or nil
 end
 
 --- 장수의 소속 세력 표시 이름(재야면 "재야").
@@ -260,9 +268,13 @@ local function drawGiftGold(state, px, py, pw, ph)
   local pad, gap = config.popup.pad, config.popup.lineGap
   local x, y = px + pad, py + pad
 
+  -- 선물 풀 = 군주 소재 지역 금(GDD 9장). 없으면 0.
+  local pool = lordRegion(state)
+  local gold = pool and pool.gold or 0
+
   love.graphics.setColor(config.colors.text)
   love.graphics.print("금 선물 — " .. o.name, x, y); y = y + gap + 4
-  love.graphics.print("군주 금: " .. state.gold, x, y); y = y + gap
+  love.graphics.print("군주 소재 지역 금: " .. gold, x, y); y = y + gap
   -- 1금 = 충성 +5(GDD 15장). 선물 후 충성 미리보기(상한 클램프).
   local after = math.min(config.officer.maxLoyalty,
     (o.loyalty or 0) + state.giftAmount * config.gift.loyaltyPerGold)
@@ -277,8 +289,8 @@ local function drawGiftGold(state, px, py, pw, ph)
   love.graphics.setColor(config.colors.text)
   love.graphics.printf(state.giftAmount .. " 금", minus.x + minus.w, minus.y + 12, 220, "center")
 
-  -- 확정(금 부족이면 비활성).
-  local ok = GameState.canGiftGold(state.gold, o, state.giftAmount)
+  -- 확정(금 부족이면 비활성). 풀 = 군주 소재 지역 금.
+  local ok = GameState.canGiftGold(gold, o, state.giftAmount)
   if ok then
     UI.draw(confirm, { hovered = UI.hit(confirm, mx, my), accent = config.colors.selectBorder })
   else
@@ -310,9 +322,93 @@ local function drawGiftEquip(state, px, py, pw)
   end
 end
 
+--- 지역 정보 팝업 본문 (GDD 17장 + 9장). 선택 지역의 자원·내부수치·적대치 표시.
+--   명마·신임도·참모는 제외(이번 범위). draw 는 game_state 조회 결과만 그린다(상태 변경 X).
+local function drawRegionInfo(state, px, py, pw, ph)
+  local rid = state.selectedId
+  local region = rid and state.regionState and state.regionState[rid]
+  if not region then return end
+  local pad, gap = config.popup.pad, config.popup.lineGap
+  local x, y = px + pad, py + pad
+  local hi = config.colors.panelValue -- 수치 강조색(상수, 매직넘버 금지)
+
+  -- 한 줄을 "라벨 + 값(강조색)" 으로 그리는 보조(드로잉만, 색은 인자로).
+  --   valueColor 가 없으면 강조색(panelValue) 사용.
+  local function line(label, value, valueColor)
+    love.graphics.setColor(config.colors.text)
+    love.graphics.print(label, x, y)
+    love.graphics.setColor(valueColor or hi)
+    -- 라벨 폭만큼 들여 값 출력. 라벨이 길지 않아 고정 들여쓰기(140px)로 정렬.
+    love.graphics.print(tostring(value), x + 140, y)
+    y = y + gap
+  end
+
+  -- 헤더: 지역명 + 소유 세력명("조조 군" 형태). 중립이면 "중립".
+  -- 소유는 정규화된 런타임 맵(state.ownership) 기준 — 중립 강등 지역이 패널에도 "중립"으로 보인다.
+  local ownerFid = state.ownership and state.ownership[rid]
+  local ownerF = ownerFid and state.scenario.factions[ownerFid]
+  local ownerLabel = ownerF and (ownerF.name .. " 군") or "중립"
+  love.graphics.setColor(config.colors.text)
+  love.graphics.print(region.name .. "  —  " .. ownerLabel, x, y); y = y + gap + 6
+
+  -- 태수(이름). governors[rid] → 장수 이름. 없으면 "—".
+  local govId = state.governors and state.governors[rid]
+  local govOff = govId and GameState.byId(state.officers, govId)
+  line("태수", govOff and govOff.name or "—")
+
+  -- 적대치(GDD 6장): 소유세력 → 플레이어 적대치.
+  --   적 세력 소유면 수치(빨강), 본인 소유·중립이면 '-'(getHostility 가 nil 반환).
+  local hostility = GameState.getHostility(state.scenario, ownerFid, state.playerFactionId)
+  if hostility then
+    line("적대치", hostility, config.colors.hostile)
+  else
+    line("적대치", "-")
+  end
+  y = y + 6
+
+  -- 인구 / 병사(지역 장수 troops 합) / 현역·재야 장수 수.
+  local here = GameState.officersInRegion(state.officers, rid)
+  local activeN, freeN, troops = 0, 0, 0
+  for _, o in ipairs(here) do
+    if o.state == GameState.STATE.active then activeN = activeN + 1 end
+    if o.state == GameState.STATE.free then freeN = freeN + 1 end
+    troops = troops + (o.troops or 0)
+  end
+  line("인구", region.pop)
+  line("병사", troops)
+  line("현역 장수", activeN .. "명")
+  line("재야 장수", freeN .. "명")
+  y = y + 6
+
+  -- 금 / 군량 / 금1당 쌀(월별 군량가 — GDD 9장, 매입/판매 미구현 → 추후).
+  line("금", region.gold)
+  line("군량", region.grain)
+  line("금1당 쌀", "— (추후)")
+  y = y + 6
+
+  -- 내부 수치(민충성/토지가치/상업/치수).
+  line("민충성도", region.loyal)
+  line("토지가치", region.land)
+  line("상업", region.commerce)
+  line("치수도", region.flood)
+end
+
 --- 팝업 디스패처(모달). 열린 게 없으면 아무것도 안 그림. (읽기 전용)
 -- @param state table  main 의 게임/UI 상태
 function Popup.draw(state)
+  -- 지역 정보 팝업은 독립 모달(장수 목록/선물과 별개) — 먼저 분기.
+  if state.regionInfoOpen then
+    drawScrim()
+    local px, py, pw, ph = popupRect()
+    love.graphics.setColor(config.popup.bg)
+    love.graphics.rectangle("fill", px, py, pw, ph, 10, 10)
+    drawRegionInfo(state, px, py, pw, ph)
+    local mx, my = love.mouse.getPosition()
+    local cb = closeButton(px, py, pw)
+    UI.draw(cb, { hovered = UI.hit(cb, mx, my), accent = config.colors.selectBorder })
+    return
+  end
+
   if not (state.listOpen or state.detailId or state.sub) then return end
   drawScrim()
   local px, py, pw, ph = popupRect()
@@ -342,6 +438,13 @@ end
 -- 부작용: state 의 팝업 필드 + (선물 확정 시) gold/officer 변경.
 -- @return boolean  팝업이 열려 있었으면(=클릭 소비) true
 function Popup.consumeClick(state, x, y)
+  -- 지역 정보 팝업(독립 모달): X 만 닫기. 다른 인터랙션 없음.
+  if state.regionInfoOpen then
+    local px, py, pw = popupRect()
+    if UI.hit(closeButton(px, py, pw), x, y) then state.regionInfoOpen = false end
+    return true
+  end
+
   if not (state.listOpen or state.detailId or state.sub) then return false end
 
   local px, py, pw, ph = popupRect()
@@ -358,14 +461,17 @@ function Popup.consumeClick(state, x, y)
       state.giftAmount = math.min(config.gift.goldGiftMax, state.giftAmount + 1)
     elseif UI.hit(confirm, x, y) then
       local o = detailOfficer(state)
-      local ok, reason = GameState.canGiftGold(state.gold, o, state.giftAmount)
-      if ok then
-        -- 규칙은 game_state 가 수행(충성 상승 + 금 차감). 여기선 결과만 반영.
-        state.gold = GameState.applyGiftGold(state.gold, o, state.giftAmount)
+      -- 금 차감 풀 = 군주 소재 지역 금(GDD 9장). 그 지역 금에서 빼고 다시 쓴다.
+      local pool = lordRegion(state)
+      local gold = pool and pool.gold or 0
+      local ok, reason = GameState.canGiftGold(gold, o, state.giftAmount)
+      if ok and pool then
+        -- 규칙은 game_state 가 수행(충성 상승 + 금 차감). 결과 금을 그 지역에 반영.
+        pool.gold = GameState.applyGiftGold(gold, o, state.giftAmount)
         state.sub = nil
         state.notice = nil
       else
-        state.notice = reason -- 예: "금 부족"
+        state.notice = reason or "군주 소재 지역 금 없음" -- 예: "금 부족"
       end
     end
     return true

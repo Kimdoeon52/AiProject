@@ -42,13 +42,15 @@ local state = {
   officers = nil,     -- 런타임 장수 배열(GameState.buildOfficers). 턴 리셋 대상.
   -- 플레이어(군주) 정보 — 세력 선택 후 확정.
   playerFactionId = nil, -- 플레이어 세력 id (흰 테두리·선물 게이팅 기준)
-  gold = 0,              -- 플레이어 군주 금 보유고(GDD 9장). 금 선물로 차감.
+  regionState = nil,     -- 런타임 지역상태 맵 { [id]={금·군량·내부수치} } (GameState.buildRegions)
+  ownership = nil,       -- 런타임 소유 맵 { [regionId]=fid } (정규화 복사본, GameState.normalizeOwnership)
   governors = nil,       -- 태수 맵 { [regionId]=officerId } (GameState.assignGovernors)
   factionInventory = nil,-- 세력별 미장착 장비고 { [fid]={장비,...} } (장비 선물 대상)
   -- 팝업 UI 상태(지도 화면). draw 는 읽기만, 변경은 입력 콜백.
   listOpen = false,   -- 장수 목록 팝업 열림 여부
+  regionInfoOpen = false, -- 지역 정보 팝업 열림 여부(GDD 17장)
   detailId = nil,     -- 상세 보는 장수 id (nil=목록만)
-  sub = nil,          -- 서브 팝업: nil | "gold" (금 선물)
+  sub = nil,          -- 서브 팝업: nil | "gold" | "equip"
   giftAmount = 1,     -- 금 선물 선택 금액(1~goldGiftMax)
   notice = nil,       -- 일시 안내 문구(예: "금 부족") — 표시용
   -- 마우스 누름 상태(지도 화면 전용). 누르면 생기고 떼면 nil.
@@ -91,8 +93,9 @@ end
 -- @return table  {r,g,b}
 local function regionColor(r)
   local sc = state.scenario
-  if sc then
-    local fid = sc.ownership[r.id]
+  -- 소유 조회는 정규화된 런타임 맵(state.ownership) 기준 — 중립 강등이 색에 반영된다(GDD 6장).
+  if sc and state.ownership then
+    local fid = state.ownership[r.id]
     local f = fid and sc.factions[fid]
     if f then return f.color end
   end
@@ -102,8 +105,8 @@ end
 --- 지역 소유 세력의 표시 이름(없으면 "중립").
 local function regionFactionName(r)
   local sc = state.scenario
-  local fid = sc and sc.ownership[r.id]
-  local f = fid and sc.factions[fid]
+  local fid = state.ownership and state.ownership[r.id]
+  local f = (sc and fid) and sc.factions[fid]
   return f and f.name or "중립"
 end
 
@@ -276,7 +279,7 @@ local function drawHexMap()
     love.graphics.setColor(config.colors.playerBorder)
     love.graphics.setLineWidth(config.map.selectBorderWidth)
     for _, r in ipairs(regions) do
-      if state.scenario.ownership[r.id] == state.playerFactionId then
+      if state.ownership and state.ownership[r.id] == state.playerFactionId then
         love.graphics.polygon("line", corners[r.id])
       end
     end
@@ -348,18 +351,37 @@ local function officerCheckButton()
   return UI.newButton(tb.x, tb.y - tb.h - gap, tb.w, tb.h, "장수 확인", "officers")
 end
 
+--- "정보 확인" 버튼을 만든다(장수 확인 버튼 바로 위). 선택 지역 상세 팝업 열기용.
+-- @return table  UI 버튼
+local function infoCheckButton()
+  local ob = officerCheckButton()
+  local gap = 12
+  return UI.newButton(ob.x, ob.y - ob.h - gap, ob.w, ob.h, "정보 확인", "info")
+end
+
 --- 턴 진행에 넘길 컨텍스트(장수 목록 + 미구현 시스템 훅)를 만든다.
 -- 아직 없는 시스템(도착·성장·AI·수확)은 로그만 남기는 스텁 콜백으로 둔다.
 --   콜백은 game_state.advanceTurn 이 정해진 순서로 호출(시그니처 function(turn, ctx)).
 -- @return table  ctx
 local function turnContext()
+  local ownership = state.ownership -- 정규화된 런타임 소유 맵(세금/수확은 실효 소유 지역만)
   return {
-    officers = state.officers, -- 어제 작업: 턴 시작 시 행동완료 리셋 대상
+    officers = state.officers, -- 턴 시작 시 행동완료 리셋 대상
     -- print(): 콘솔(터미널) 출력. love.graphics.print(화면 그리기)와 다름.
-    --   lovec(콘솔판)에서 보임 → 7월 수확 훅 호출 검증용.
+    --   lovec(콘솔판)에서 보임 → 턴/수확 진행 확인용.
     onTurnEnd = function(t) print(string.format("[턴] %d년 %d월 종료 (턴 #%d)", t.year, t.month, t.count)) end,
-    onHarvest = function(t) print(string.format("[수확 훅] %d년 %d월 — 군량 수확 (GDD 9장, 계산 미구현)", t.year, t.month)) end,
-    -- onArrivals / onGrowth / onAI 는 아직 미정 → 생략(=빈 스텁). 시스템 생기면 끼운다.
+    -- 세금·군량·인구 성장 단계(GDD 9장): 소유 지역마다 세금을 그 지역 금에 가산.
+    --   규칙은 game_state.collectTaxes 가 수행(태수 정치 반영). 여기선 호출만.
+    onGrowth = function()
+      local total = GameState.collectTaxes(state.regionState, state.governors, state.officers, ownership)
+      print(string.format("[세금] 소유 지역 총 징수 %d금", total))
+    end,
+    -- 7월 수확 훅(GDD 9장): 소유 지역마다 수확 군량을 그 지역 군량에 가산.
+    onHarvest = function(t)
+      local total = GameState.harvestAll(state.regionState, state.governors, state.officers, ownership)
+      print(string.format("[수확] %d년 %d월 — 소유 지역 총 수확 %d군량", t.year, t.month, total))
+    end,
+    -- onArrivals / onAI 는 아직 미정 → 생략(=빈 스텁). 시스템 생기면 끼운다.
   }
 end
 
@@ -394,7 +416,10 @@ local function drawPanel()
   local pf = state.playerFactionId and state.scenario.factions[state.playerFactionId]
   if pf then
     love.graphics.print("세력: " .. pf.name, x, y); y = y + gap
-    love.graphics.print("금: " .. state.gold, x, y); y = y + gap
+    -- 금은 지역별 보유(GDD 9장). 패널엔 "군주가 위치한 지역의 금"(선물이 차감하는 풀)을 표시.
+    local lordRid = GameState.lordRegionId(state.officers, state.playerFactionId, state.scenario)
+    local lordRegion = lordRid and state.regionState[lordRid]
+    love.graphics.print("금(군주 소재): " .. (lordRegion and lordRegion.gold or 0), x, y); y = y + gap
   end
   y = y + 6
 
@@ -420,15 +445,22 @@ local function drawPanel()
     love.graphics.print("지역을 클릭해 선택", x, y)
   end
 
-  -- ③ 하단 버튼들: "장수 확인"(선택 지역 있을 때만 활성) + "턴 종료".
+  -- ③ 하단 버튼들: "정보 확인"·"장수 확인"(선택 지역 있을 때만 활성) + "턴 종료".
   local mx, my = love.mouse.getPosition()
+  local DISABLED = { text = { 0.5, 0.52, 0.58 }, border = { 0.3, 0.31, 0.36 } }
+
+  local info = infoCheckButton()
+  if state.selectedId then
+    UI.draw(info, { hovered = UI.hit(info, mx, my), accent = config.colors.selectBorder })
+  else
+    UI.draw(info, DISABLED) -- 선택 지역 없으면 비활성(클릭은 입력에서 무시)
+  end
 
   local chk = officerCheckButton()
   if state.selectedId then
     UI.draw(chk, { hovered = UI.hit(chk, mx, my), accent = config.colors.selectBorder })
   else
-    -- 비활성 표시(회색 텍스트). 클릭 무시(입력에서 selectedId 확인).
-    UI.draw(chk, { text = { 0.5, 0.52, 0.58 }, border = { 0.3, 0.31, 0.36 } })
+    UI.draw(chk, DISABLED)
   end
 
   local btn = turnButton()
@@ -487,7 +519,18 @@ local function startScenario(idx)
   -- 턴 상태(시작 연/월) + 런타임 장수 구성.
   state.turn = GameState.newTurn(state.scenario)
   state.officers = GameState.buildOfficers(game_data, state.scenario)
+  -- 소유↔배치 정합성 정규화(GDD 6장): active 0명 소유 지역은 중립으로 강등한 "복사본"을 쓴다.
+  --   game_data 원본 불변 — 런타임 소유는 state.ownership 가 진실원본이 된다.
+  local ownership, demoted = GameState.normalizeOwnership(state.scenario, state.officers)
+  state.ownership = ownership
+  -- 강등(중립 전환)된 지역을 콘솔에 한 줄씩 남긴다(왜 중립이 됐는지 추적용).
+  for _, d in ipairs(demoted) do
+    print(string.format("[정합성] 지역 '%s' active 0명 → 세력 '%s' 소유 해제(중립)", d.region, d.faction))
+  end
+  -- 런타임 지역상태(금·군량 보유) 구성 — 금 진실원본 = 지역별(GDD 9장).
+  state.regionState = GameState.buildRegions(game_data, state.scenario)
   -- 초기 장비 적용(군주 귀속 미장착 장비고) + 지역별 태수 자동 선정(GDD 5·8장).
+  --   정규화 뒤에 태수를 뽑으므로, 중립 강등된 빈 지역은 assignGovernor 가 nil 반환(태수 자동 해제).
   state.factionInventory = GameState.applyInitialEquipment(game_data, state.scenario, state.officers)
   state.governors = GameState.assignGovernors(state.regions, state.officers, rng)
   -- 시나리오 진입 후엔 "세력(군주) 선택" 단계로(GDD 3장 흐름 2번).
@@ -500,8 +543,7 @@ end
 -- @param factionId string  선택한 세력 id
 local function chooseFaction(factionId)
   state.playerFactionId = factionId
-  -- 군주 금 보유고 시작값(GDD 9장). 세수 수입 도입 전 placeholder 상수.
-  state.gold = config.faction.startGold
+  -- 금은 지역별 보유가 진실원본(GDD 9장) → 군주 금고 placeholder 없음.
   state.selectedId = nil
   state.scene = "map"
   refitCamera() -- 지도 진입 시 fit/중앙 맞춤
@@ -538,6 +580,12 @@ function love.mousepressed(x, y, button)
   -- 최하단 턴 버튼(누른 즉시 실행).
   if UI.hit(turnButton(), x, y) then
     advanceGameTurn()
+    return
+  end
+
+  -- "정보 확인" 버튼(선택 지역 있을 때만) → 지역 정보 팝업 열기.
+  if state.selectedId and UI.hit(infoCheckButton(), x, y) then
+    state.regionInfoOpen = true
     return
   end
 
@@ -599,6 +647,8 @@ function love.keypressed(key)
       state.detailId = nil
     elseif state.listOpen then
       state.listOpen = false
+    elseif state.regionInfoOpen then
+      state.regionInfoOpen = false -- 지역 정보 팝업 닫기(독립 모달)
     else
       -- 팝업이 없으면 지도 → 시나리오 선택으로(상태 초기화).
       state.scene = "select"

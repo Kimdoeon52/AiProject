@@ -35,6 +35,8 @@ config.colors = {
   background = { 0.12, 0.13, 0.16 },       -- 지도 배경(영토 밖)
   statBonus = { 0.55, 0.90, 0.45 },        -- 장비 보너스(+)가 붙은 능력치 색 — 연두 (GDD 8장)
   statPenalty = { 0.95, 0.45, 0.40 },      -- 장비 패널티(−)가 붙은 능력치 색 — 빨강
+  panelValue = { 0.85, 0.90, 1.00 },       -- 지역 정보 패널의 수치 강조색 — 옅은 하늘 (GDD 17장)
+  hostile = { 0.95, 0.45, 0.40 },          -- 적대치 수치 강조색 — 빨강 (GDD 6장 외교)
 }
 
 -- 카메라 줌 배율/한계. main.lua wheelmoved·load 에서 사용.
@@ -61,11 +63,30 @@ config.officer = {
   maxLoyalty = 100,
 }
 
--- 세력(군주) 상수 (GDD 9장). 플레이어 군주의 금 보유고 등.
-config.faction = {
-  -- 플레이어 군주 시작 금. (임시 placeholder — 매 턴 세수 수입(GDD 9장)이 도입되면
-  --  그쪽으로 채워진다. 지금은 선물 차감을 시연/검증할 수 있게 상수로 둔다.)
-  startGold = 500,
+-- 경제 계수 (GDD 9장). 세금·수확 공식의 계수 단일 출처(매직넘버 금지).
+--   GDD 9장은 "어떤 값에 영향받는지"만 정하고 구체 계수는 코드에 둔다(밸런싱 대상).
+--   규칙 계층(game_state)의 calcTax/calcHarvest 가 읽어 쓴다.
+config.economy = {
+  -- 세금 = (상업*taxCommerce + 토지*taxLand) * (민충성/100) * (1 + 태수정치*taxPolBonus)
+  --   상업이 토지보다 세수 기여 큼(taxCommerce>taxLand). 민충성 비율이 전체를 깎거나 키움.
+  taxCommerce = 2.0,   -- 상업 1당 세금 기여
+  taxLand     = 1.0,   -- 토지가치 1당 세금 기여
+  taxPolBonus = 0.005, -- 태수 정치 1당 세금 배수 가산 (정치 80 → +40%)
+
+  -- 수확 = (토지*harvestLand + 치수*harvestFlood) * (민충성/100) * (1 + 태수정치*harvestPolBonus)
+  --   군량은 금보다 단위 수가 커 계수도 크게. 치수(관개)가 토지와 함께 수확을 키운다.
+  harvestLand     = 5.0,
+  harvestFlood    = 3.0,
+  harvestPolBonus = 0.005,
+}
+
+-- 외교/적대치 상수 (GDD 6장 외교). 세력 쌍 적대 수준(0~100, 높을수록 적대).
+--   시나리오 데이터는 "단계 문자열"만 두고, 단계→수치 변환은 여기 한 곳에서(데이터 분산 방지).
+config.hostility = {
+  -- 단계 → 수치. 동맹(0) < 우호(20) < 중립(50) < 적대(85).
+  tier = { ally = 0, friendly = 20, neutral = 50, hostile = 85 },
+  defaultTier = "neutral", -- 시나리오에 미기재된 세력 쌍의 기본 단계
+  maxValue = 100,          -- 적대치 상한(추후 동적 상승 시 클램프용)
 }
 
 -- 선물 시스템 상수 (GDD 15장). 규칙 계층(game_state)이 읽어 쓴다.

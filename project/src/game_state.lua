@@ -447,6 +447,216 @@ function GameState.canSetGovernor(officer, regionId)
   return officer.region == regionId and officer.state == GameState.STATE.active
 end
 
+-- ── 소유↔배치 정합성 (GDD 6장: 배치 우선) ───────────────
+--   규칙: 세력 소유 지역에는 그 세력 active 장수가 최소 1명 있어야 한다.
+--   active 0명이 된 소유 지역은 중립으로 전환한다(소유는 있는데 지킬 사람이 없으면 무주공산).
+--   "배치가 소유의 진실원본" — 시작 정규화(로드 직후)와 런타임(이동/전투로 0명) 모두 같은 규칙.
+
+--- 한 지역에 있는 "특정 세력 소속 active" 장수 수를 센다.
+-- 정합성 판정의 기준값: 이 수가 0이면 그 세력은 그 지역을 실효 지배하지 못한다.
+-- @param officers table   런타임 장수 배열
+-- @param regionId string  대상 지역
+-- @param factionId any    소유(판정 대상) 세력 id
+-- @return number  조건을 만족하는 active 장수 수(0 이상)
+function GameState.regionActiveCount(officers, regionId, factionId)
+  local n = 0
+  for _, o in ipairs(officers) do
+    -- 같은 지역 + 같은 세력 + active 상태만 카운트(재야·포로·타 세력 제외).
+    if o.region == regionId and o.faction == factionId and o.state == GameState.STATE.active then
+      n = n + 1
+    end
+  end
+  return n
+end
+
+--- 시나리오 ownership 을 정합성 규칙에 맞게 정규화한 "복사본"을 만든다(로드 직후 1회).
+-- 왜 복사본인가: game_data 원본(scenario.ownership)은 모든 세션이 공유하는 정적 데이터라
+--   직접 수정하면 안 된다(buildRegions/buildOfficers 와 같은 "정적 → 런타임 복사" 패턴).
+-- 처리: 소유 지역인데 그 세력 active 장수가 0명이면 복사본에서 제거(=중립) + 강등 목록에 기록.
+-- @param scenario table  scenario.ownership { [regionId]=factionId } 보유
+-- @param officers table  런타임 장수(regionActiveCount 판정용)
+-- @return table  ownershipCopy  정규화된 소유 맵(런타임용, state.ownership 에 보관)
+-- @return table  demotedList    { {region=지역id, faction=원소유세력id}, ... } (콘솔 로그용)
+-- 부작용: 없음(새 테이블만 반환). game_data 불변.
+function GameState.normalizeOwnership(scenario, officers)
+  local out = {}
+  local demoted = {}
+  for regionId, fid in pairs(scenario.ownership) do
+    if GameState.regionActiveCount(officers, regionId, fid) > 0 then
+      out[regionId] = fid -- active ≥1 → 소유 유지
+    else
+      -- active 0명 → 중립으로 강등(복사본에 넣지 않음). 원인 기록.
+      demoted[#demoted + 1] = { region = regionId, faction = fid }
+    end
+  end
+  return out, demoted
+end
+
+--- 런타임 단일 지역 정합성 검사: active 0명이면 중립 강등 + 태수 해제 (GDD 6장).
+-- 호출 시점(예정): 장수 이동/전투로 어떤 지역의 active 가 빠진 직후. 그 지역만 재검사한다.
+--   C#/C++ 비교: 이벤트 핸들러(OnUnitLeftRegion) 안에서 호출하는 후처리 콜백에 해당.
+-- @param ownership table  런타임 소유 맵(직접 변경됨)
+-- @param governors table|nil  태수 맵 { [regionId]=officerId } (있으면 강등 시 해제)
+-- @param officers table   런타임 장수
+-- @param regionId string  검사할 지역
+-- @return boolean  강등(중립 전환)이 일어났으면 true
+-- 부작용: 강등 시 ownership[regionId]=nil, governors[regionId]=nil.
+function GameState.demoteIfVacant(ownership, governors, officers, regionId)
+  local fid = ownership[regionId]
+  if not fid then return false end -- 이미 중립
+  if GameState.regionActiveCount(officers, regionId, fid) > 0 then
+    return false -- 아직 지킬 장수 있음
+  end
+  ownership[regionId] = nil          -- 중립 전환
+  if governors then governors[regionId] = nil end -- 태수 해제
+  return true
+end
+-- TODO: 이동/수송/전투 시스템(GDD 12·13장) 구현 시, 출발 지역에서 active 가 빠지는 지점마다
+--       demoteIfVacant(state.ownership, state.governors, state.officers, fromRegionId) 를 호출할 것.
+
+-- ── 지역 자원/경제 (GDD 5·9장) ───────────────────────────
+--   금·군량은 "지역별 보유"가 진실원본(세력 단일 금고 아님).
+--   base 내부수치(인구/상업/토지/민충성/치수)는 game_data.regions 공유 →
+--   런타임에 시나리오 regionInit(금·군량 override)를 합쳐 "변경 가능한 지역상태"를 만든다.
+--   (장수의 buildOfficers 와 같은 패턴: 정적 base + 시나리오 배치 → 런타임 레코드)
+
+--- 시나리오 기준 런타임 지역상태 맵을 만든다 (GDD 5·9장).
+-- 흐름: regions base 복사 + scenario.regionInit[id] 의 금·군량 override.
+-- 부작용: 없음(새 테이블만 반환). game_data 원본 불변(매 턴 gold/grain 가산은 이 반환본에).
+-- @param gameData table  regions(base) 보유
+-- @param scenario table  regionInit 보유(없을 수 있음)
+-- @return table  { [regionId] = { id, name, pop, commerce, land, loyal, flood, gold, grain } }
+function GameState.buildRegions(gameData, scenario)
+  local init = scenario.regionInit or {}
+  local out = {}
+  for _, r in ipairs(gameData.regions) do
+    local ov = init[r.id] or {}
+    out[r.id] = {
+      id = r.id, name = r.name,
+      pop = r.pop, commerce = r.commerce, land = r.land,
+      loyal = r.loyal, flood = r.flood,
+      -- override 있으면 그 값, 없으면 base. (Lua: a or b = a가 nil/false면 b)
+      gold = ov.gold or r.gold,
+      grain = ov.grain or r.grain,
+    }
+  end
+  return out
+end
+
+--- 한 지역의 이번 턴 세금을 계산한다 (GDD 9장).
+-- 공식: (상업*taxCommerce + 토지*taxLand) * (민충성/100) * (1 + 태수정치*taxPolBonus).
+--   왜 이렇게: 상업·토지가 세원, 민충성은 징수 효율(낮으면 덜 걷힘), 태수 정치가 행정 보정.
+--   태수 없으면 정치 보정 0(배수 1.0). 계수는 config.economy(매직넘버 금지).
+-- @param region table    런타임 지역(commerce/land/loyal)
+-- @param governor table|nil  그 지역 태수 장수(정치 pol). 없으면 nil.
+-- @return number  이번 턴 세금(정수)
+function GameState.calcTax(region, governor)
+  local e = config.economy
+  local base = region.commerce * e.taxCommerce + region.land * e.taxLand
+  local loyalFactor = region.loyal / 100
+  local pol = governor and governor.pol or 0
+  local mult = 1 + pol * e.taxPolBonus
+  -- math.floor(): 소수 버림(정수화). C 의 (int) 캐스트와 비슷(양수 기준).
+  return math.floor(base * loyalFactor * mult)
+end
+
+--- 한 지역의 7월 군량 수확량을 계산한다 (GDD 9장).
+-- 공식: (토지*harvestLand + 치수*harvestFlood) * (민충성/100) * (1 + 태수정치*harvestPolBonus).
+--   토지·치수(관개)가 산출, 민충성이 효율, 태수 정치가 보정. 7월에만 호출(advanceTurn 훅).
+-- @param region table        런타임 지역(land/flood/loyal)
+-- @param governor table|nil  그 지역 태수(정치 pol)
+-- @return number  수확 군량(정수)
+function GameState.calcHarvest(region, governor)
+  local e = config.economy
+  local base = region.land * e.harvestLand + region.flood * e.harvestFlood
+  local loyalFactor = region.loyal / 100
+  local pol = governor and governor.pol or 0
+  local mult = 1 + pol * e.harvestPolBonus
+  return math.floor(base * loyalFactor * mult)
+end
+
+--- 그 지역의 태수 장수 레코드를 찾는다(내부 헬퍼). 없으면 nil.
+local function governorOf(governors, officers, regionId)
+  local gid = governors and governors[regionId]
+  return gid and GameState.byId(officers, gid) or nil
+end
+
+--- 매 턴 세금 징수: 소유 지역마다 세금을 그 지역 금에 가산한다 (GDD 9장).
+-- 중립(ownership 미기재) 지역은 제외. 자기/AI 구분 없이 "소유된 지역" 전부 가산(단순화).
+-- 부작용: regionState[*].gold 증가.
+-- @param regionState table  런타임 지역상태 맵(직접 변경됨)
+-- @param governors table    { [regionId]=officerId }
+-- @param officers table     런타임 장수(태수 정치 조회용)
+-- @param ownership table    { [regionId]=factionId }  (중립이면 키 없음)
+-- @return number  이번 턴 총 징수 금(디버그/로그용)
+function GameState.collectTaxes(regionState, governors, officers, ownership)
+  local total = 0
+  for id, region in pairs(regionState) do
+    if ownership[id] then -- 소유 지역만(중립 제외)
+      local gov = governorOf(governors, officers, id)
+      local tax = GameState.calcTax(region, gov)
+      region.gold = region.gold + tax
+      total = total + tax
+    end
+  end
+  return total
+end
+
+--- 7월 수확: 소유 지역마다 수확 군량을 그 지역 군량에 가산한다 (GDD 9장).
+-- 부작용: regionState[*].grain 증가. (7월에만 호출 — advanceTurn 의 onHarvest 훅에서)
+-- @return number  이번 턴 총 수확 군량(로그용)
+function GameState.harvestAll(regionState, governors, officers, ownership)
+  local total = 0
+  for id, region in pairs(regionState) do
+    if ownership[id] then
+      local gov = governorOf(governors, officers, id)
+      local h = GameState.calcHarvest(region, gov)
+      region.grain = region.grain + h
+      total = total + h
+    end
+  end
+  return total
+end
+
+-- ── 외교/적대치 (GDD 6장 외교) ───────────────────────────
+--   세력 쌍(A→B) 적대 수준 0~100. 시나리오는 "단계 문자열"만 두고
+--   단계→수치 변환은 config.hostility.tier 한 곳에서(데이터 분산 방지).
+
+--- 단계 문자열을 적대치 수치로 변환(내부 헬퍼). 미정 단계는 중립으로.
+local function tierToValue(tierName)
+  return config.hostility.tier[tierName] or config.hostility.tier[config.hostility.defaultTier]
+end
+
+--- 지역 소유 세력 → 플레이어 세력 적대치 값을 구한다 (GDD 6장 외교).
+-- 표시 규칙(왜 nil 인가):
+--   · 소유 세력이 없음(중립 지역) → nil(패널에 '-'). 적대 대상이 없으므로.
+--   · 소유 세력 == 플레이어(본인 지역) → nil('-'). 자기 자신과는 적대치 정의 안 함.
+--   · 그 외(적/타 세력) → scenario.hostility[owner][player] 단계를 수치로. 미기재 쌍 = 중립(50).
+-- @param scenario table    hostility 보유
+-- @param ownerFid any|nil  지역 소유 세력 id (중립이면 nil)
+-- @param playerFid any     플레이어 세력 id
+-- @return number|nil  적대치 수치(0~100), 또는 nil(본인/중립)
+function GameState.getHostility(scenario, ownerFid, playerFid)
+  if not ownerFid then return nil end          -- 중립 지역
+  if ownerFid == playerFid then return nil end -- 본인 소유
+  local row = scenario.hostility and scenario.hostility[ownerFid]
+  local tierName = (row and row[playerFid]) or config.hostility.defaultTier
+  return tierToValue(tierName)
+end
+
+--- 세력 군주(lord)가 현재 위치한 지역 id 를 찾는다 (선물 금 차감 풀 식별용).
+-- 금 선물은 "군주가 위치한 지역의 금"에서 빠지므로, 그 지역을 알아야 한다(GDD 9·15장).
+-- @param officers table   런타임 장수
+-- @param factionId any    세력 id
+-- @param scenario table   factions[fid].lord 조회
+-- @return string|nil  군주 위치 지역 id (군주 없으면 nil)
+function GameState.lordRegionId(officers, factionId, scenario)
+  local f = scenario.factions[factionId]
+  if not f or not f.lord then return nil end
+  local lord = GameState.byId(officers, f.lord)
+  return lord and lord.region or nil
+end
+
 -- ── 턴/달력 (GDD 3·9장) ──────────────────────────────────
 --   1턴 = 1개월. 12월 다음은 다음 해 1월.
 --   턴 상태(turn)는 { year, month, count } 테이블로 들고 다닌다(런타임 값).

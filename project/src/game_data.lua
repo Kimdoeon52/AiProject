@@ -23,44 +23,49 @@ game_data.lua — 데이터 계층: 지역(헥스) + 시나리오(세력/소유)
 local game_data = {}
 
 -- ── 고정 지역 30개 (행 r=북→남, 같은 행 q=서→동) ──────────
+--   내부 수치(인구/상업/토지/민충성/치수)는 "지도 고유 특성"이라 모든 시나리오 공유 base 다.
+--     (CLAUDE 지도규칙: 시나리오는 소유·장수·병력·자원만 바꾼다 → 내부 발전도는 base)
+--     · pop(인구): 만(萬) 단위 추상값.  commerce(상업)/land(토지가치)/loyal(민충성)/flood(치수): 0~100.
+--   gold(금)/grain(군량): 기본 보유 자원. 시나리오가 regionInit 로 일부만 덮어쓴다(미기재는 이 base).
+--   값은 거점 규모 고증 톤(낙양·장안·성도·건업·업 큼, 운남·무위·천수 작음). 절대 고증값 아님(밸런싱 대상).
 game_data.regions = {
   -- r0 북단
-  { id = "jinyang",  name = "진양", q = 1, r = 0 },
-  { id = "bohai",    name = "발해", q = 2, r = 0 },
-  { id = "beiping",  name = "북평", q = 3, r = 0 },
+  { id = "jinyang",  name = "진양", q = 1, r = 0, pop = 55, commerce = 50, land = 55, loyal = 52, flood = 48, gold = 600,  grain = 1800 },
+  { id = "bohai",    name = "발해", q = 2, r = 0, pop = 70, commerce = 62, land = 68, loyal = 58, flood = 55, gold = 850,  grain = 2600 },
+  { id = "beiping",  name = "북평", q = 3, r = 0, pop = 48, commerce = 42, land = 48, loyal = 50, flood = 45, gold = 480,  grain = 1500 },
   -- r1 하북
-  { id = "wuwei",    name = "무위", q = 0, r = 1 },
-  { id = "ye",       name = "업",   q = 1, r = 1 },
-  { id = "pingyuan", name = "평원", q = 2, r = 1 },
-  { id = "puyang",   name = "복양", q = 3, r = 1 },
-  { id = "xiapi",    name = "하비", q = 4, r = 1 },
+  { id = "wuwei",    name = "무위", q = 0, r = 1, pop = 35, commerce = 32, land = 38, loyal = 48, flood = 40, gold = 350,  grain = 1100 },
+  { id = "ye",       name = "업",   q = 1, r = 1, pop = 82, commerce = 78, land = 80, loyal = 60, flood = 58, gold = 1300, grain = 3600 },
+  { id = "pingyuan", name = "평원", q = 2, r = 1, pop = 58, commerce = 52, land = 58, loyal = 55, flood = 50, gold = 620,  grain = 1900 },
+  { id = "puyang",   name = "복양", q = 3, r = 1, pop = 60, commerce = 58, land = 60, loyal = 54, flood = 52, gold = 680,  grain = 2000 },
+  { id = "xiapi",    name = "하비", q = 4, r = 1, pop = 62, commerce = 60, land = 62, loyal = 53, flood = 52, gold = 720,  grain = 2100 },
   -- r2 중원
-  { id = "tianshui", name = "천수", q = -1, r = 2 },
-  { id = "changan",  name = "장안", q = 0, r = 2 },
-  { id = "hongnong", name = "홍농", q = 1, r = 2 },
-  { id = "luoyang",  name = "낙양", q = 2, r = 2 },
-  { id = "chenliu",  name = "진류", q = 3, r = 2 },
-  { id = "xuchang",  name = "허창", q = 4, r = 2 },
-  { id = "pengcheng",name = "팽성", q = 5, r = 2 },
+  { id = "tianshui", name = "천수", q = -1, r = 2, pop = 38, commerce = 35, land = 42, loyal = 48, flood = 42, gold = 380,  grain = 1200 },
+  { id = "changan",  name = "장안", q = 0, r = 2, pop = 80, commerce = 75, land = 78, loyal = 55, flood = 56, gold = 1200, grain = 3400 },
+  { id = "hongnong", name = "홍농", q = 1, r = 2, pop = 50, commerce = 48, land = 52, loyal = 52, flood = 50, gold = 520,  grain = 1600 },
+  { id = "luoyang",  name = "낙양", q = 2, r = 2, pop = 90, commerce = 85, land = 82, loyal = 58, flood = 60, gold = 1500, grain = 4000 },
+  { id = "chenliu",  name = "진류", q = 3, r = 2, pop = 68, commerce = 66, land = 68, loyal = 55, flood = 54, gold = 900,  grain = 2700 },
+  { id = "xuchang",  name = "허창", q = 4, r = 2, pop = 75, commerce = 72, land = 74, loyal = 60, flood = 56, gold = 1050, grain = 3100 },
+  { id = "pengcheng",name = "팽성", q = 5, r = 2, pop = 58, commerce = 55, land = 58, loyal = 52, flood = 50, gold = 640,  grain = 1900 },
   -- r3 형북·예남·강동북
-  { id = "hanzhong", name = "한중", q = -1, r = 3 },
-  { id = "xinye",    name = "신야", q = 0, r = 3 },
-  { id = "xiangyang",name = "양양", q = 1, r = 3 },
-  { id = "runan",    name = "여남", q = 2, r = 3 },
-  { id = "jianye",   name = "건업", q = 3, r = 3 },
-  { id = "guangling",name = "광릉", q = 4, r = 3 },
+  { id = "hanzhong", name = "한중", q = -1, r = 3, pop = 55, commerce = 52, land = 62, loyal = 56, flood = 55, gold = 650,  grain = 2300 },
+  { id = "xinye",    name = "신야", q = 0, r = 3, pop = 40, commerce = 40, land = 50, loyal = 52, flood = 48, gold = 420,  grain = 1400 },
+  { id = "xiangyang",name = "양양", q = 1, r = 3, pop = 72, commerce = 70, land = 72, loyal = 57, flood = 56, gold = 980,  grain = 2900 },
+  { id = "runan",    name = "여남", q = 2, r = 3, pop = 78, commerce = 68, land = 70, loyal = 54, flood = 52, gold = 920,  grain = 2800 },
+  { id = "jianye",   name = "건업", q = 3, r = 3, pop = 78, commerce = 76, land = 72, loyal = 60, flood = 58, gold = 1150, grain = 3300 },
+  { id = "guangling",name = "광릉", q = 4, r = 3, pop = 48, commerce = 46, land = 50, loyal = 50, flood = 50, gold = 500,  grain = 1600 },
   -- r4 익주·형중·강동남
-  { id = "chengdu",  name = "성도", q = -2, r = 4 },
-  { id = "jiangling",name = "강릉", q = -1, r = 4 },
-  { id = "chaisang", name = "시상", q = 0, r = 4 },
-  { id = "wujun",    name = "오군", q = 1, r = 4 },
-  { id = "kuaiji",   name = "회계", q = 2, r = 4 },
+  { id = "chengdu",  name = "성도", q = -2, r = 4, pop = 88, commerce = 80, land = 84, loyal = 62, flood = 62, gold = 1400, grain = 3900 },
+  { id = "jiangling",name = "강릉", q = -1, r = 4, pop = 65, commerce = 64, land = 70, loyal = 56, flood = 58, gold = 880,  grain = 2700 },
+  { id = "chaisang", name = "시상", q = 0, r = 4, pop = 52, commerce = 54, land = 56, loyal = 55, flood = 54, gold = 620,  grain = 1900 },
+  { id = "wujun",    name = "오군", q = 1, r = 4, pop = 70, commerce = 72, land = 68, loyal = 58, flood = 56, gold = 950,  grain = 2800 },
+  { id = "kuaiji",   name = "회계", q = 2, r = 4, pop = 60, commerce = 60, land = 60, loyal = 56, flood = 54, gold = 720,  grain = 2200 },
   -- r5 형남·익동
-  { id = "jiangzhou",name = "강주", q = -2, r = 5 },
-  { id = "wuling",   name = "무릉", q = -1, r = 5 },
-  { id = "changsha", name = "장사", q = 0, r = 5 },
+  { id = "jiangzhou",name = "강주", q = -2, r = 5, pop = 42, commerce = 40, land = 50, loyal = 52, flood = 50, gold = 430,  grain = 1500 },
+  { id = "wuling",   name = "무릉", q = -1, r = 5, pop = 38, commerce = 36, land = 48, loyal = 50, flood = 48, gold = 380,  grain = 1300 },
+  { id = "changsha", name = "장사", q = 0, r = 5, pop = 58, commerce = 54, land = 60, loyal = 54, flood = 54, gold = 640,  grain = 2000 },
   -- r6 최남
-  { id = "yunnan",   name = "운남", q = -2, r = 6 },
+  { id = "yunnan",   name = "운남", q = -2, r = 6, pop = 28, commerce = 26, land = 38, loyal = 46, flood = 40, gold = 280,  grain = 950 },
 }
 
 -- ── 장수 베이스 데이터 (GDD 7장) ─────────────────────────
@@ -118,6 +123,9 @@ game_data.officers = {
   { id = "liuye",      name = "유엽",   might = 30, intel = 90, pol = 80, hp = 66, appear = 196 },
   { id = "dongzhao",   name = "동소",   might = 30, intel = 88, pol = 82, hp = 68, appear = 196 },
   { id = "jiakui",     name = "가규",   might = 55, intel = 82, pol = 80, hp = 74, appear = 211 },
+  { id = "haozhao",    name = "학소",   might = 84, intel = 80, pol = 62, hp = 80, appear = 211 }, -- 진창 수비 명장
+  { id = "caozhang",   name = "조창",   might = 92, intel = 50, pol = 44, hp = 84, appear = 211 }, -- 황수아(조비 동생)
+  { id = "chentai",    name = "진태",   might = 82, intel = 88, pol = 76, hp = 78, appear = 240 }, -- 옹주 방면 명장
 
   -- 촉(유비) 진영 인물군 ─ 도원 형제 + 와룡봉추 + 익주계
   { id = "liubei",     name = "유비",   might = 73, intel = 78, pol = 80, hp = 84, appear = 184 },
@@ -150,6 +158,10 @@ game_data.officers = {
   { id = "jiangwan",   name = "장완",   might = 20, intel = 85, pol = 90, hp = 66, appear = 211 },
   { id = "feiyi",      name = "비의",   might = 25, intel = 88, pol = 90, hp = 66, appear = 221 },
   { id = "dongyun",    name = "동윤",   might = 15, intel = 80, pol = 86, hp = 64, appear = 221 },
+  { id = "wangping",   name = "왕평",   might = 84, intel = 76, pol = 62, hp = 80, appear = 211 }, -- 가정·무당비군
+  { id = "zhangyi",    name = "장익",   might = 80, intel = 74, pol = 66, hp = 78, appear = 211 }, -- 촉 후기 명장
+  { id = "machong",    name = "마충",   might = 80, intel = 66, pol = 58, hp = 78, appear = 211 }, -- 촉 마충(남중 평정)
+  { id = "dengzhi",    name = "등지",   might = 60, intel = 84, pol = 84, hp = 74, appear = 221 }, -- 오촉 동맹 사신
 
   -- 오(손씨) 진영 인물군 ─ 손씨 일족 + 강동 사대도독 + 강표 명사
   { id = "sunjian",    name = "손견",   might = 90, intel = 70, pol = 60, hp = 84, appear = 184 },
@@ -180,6 +192,9 @@ game_data.officers = {
   { id = "ganze",      name = "감택",   might = 15, intel = 84, pol = 82, hp = 64, appear = 210 },
   { id = "buzhi",      name = "보즐",   might = 20, intel = 82, pol = 84, hp = 66, appear = 210 },
   { id = "guyong",     name = "고옹",   might = 13, intel = 82, pol = 90, hp = 66, appear = 200 },
+  { id = "zhuzhi",     name = "주치",   might = 78, intel = 70, pol = 72, hp = 78, appear = 190 }, -- 손씨 3대 원로
+  { id = "zhuhuan",    name = "주환",   might = 86, intel = 78, pol = 58, hp = 80, appear = 211 }, -- 유수 방어 명장
+  { id = "quancong",   name = "전종",   might = 80, intel = 74, pol = 70, hp = 78, appear = 211 }, -- 강동 호족 명장
 
   -- 동탁·여포 진영 인물군 ─ 서량 군벌 + 여포 휘하
   { id = "dongzhuo",   name = "동탁",   might = 87, intel = 62, pol = 40, hp = 82, appear = 184 },
@@ -238,6 +253,7 @@ game_data.officers = {
 
   -- 공손찬·유주 진영 인물군
   { id = "gongsunzan", name = "공손찬", might = 82, intel = 58, pol = 50, hp = 82, appear = 184 },
+  { id = "gongsunyue", name = "공손월", might = 76, intel = 48, pol = 44, hp = 76, appear = 184 }, -- 공손찬 사촌동생
   { id = "liuyu",      name = "유우",   might = 20, intel = 76, pol = 88, hp = 64, appear = 184 },
   { id = "tianchou",   name = "전주",   might = 50, intel = 82, pol = 80, hp = 70, appear = 190 },
 
@@ -264,6 +280,9 @@ game_data.officers = {
   { id = "zhangbao",   name = "장보",   might = 72, intel = 60, pol = 40, hp = 78, appear = 184 },
   { id = "zhangliang", name = "장량",   might = 73, intel = 58, pol = 38, hp = 78, appear = 184 },
   { id = "bocai",      name = "파재",   might = 68, intel = 55, pol = 30, hp = 76, appear = 184 },
+  { id = "zhangmancheng", name = "장만성", might = 70, intel = 48, pol = 32, hp = 76, appear = 184 }, -- 남양 황건 수령
+  { id = "mayuanyi",   name = "마원의", might = 60, intel = 58, pol = 40, hp = 72, appear = 184 }, -- 황건 낙양 내응
+  { id = "buji",       name = "복기",   might = 71, intel = 46, pol = 30, hp = 76, appear = 184 }, -- 동군 황건 수령
   { id = "zhangyan",   name = "장연",   might = 80, intel = 60, pol = 45, hp = 80, appear = 188 },
   { id = "peiyuanshao",name = "배원소", might = 74, intel = 45, pol = 35, hp = 76, appear = 188 },
 
@@ -341,26 +360,28 @@ game_data.scenarios = {
       gongsunzan   = { name = "공손찬",     color = { 0.30, 0.68, 0.70 }, lord = "gongsunzan" }, -- 유주 청록
       sunjian      = { name = "손견",       color = { 0.85, 0.25, 0.25 }, lord = "sunjian"    }, -- 손씨 빨강
     },
+    --   ※ 배치 우선 정합성(GDD 6장): 184 는 군웅 다수가 무명·소수 인원이라 모든 소유 지역을
+    --     active 1명 이상으로 채울 수 없다. 채울 수 있는 곳만 소유로 두고, 그 시대 부장이 없는
+    --     지역(동탁 무위, 유언 외곽, 손견 강동 4지역 등)은 처음부터 중립(미기재)으로 둔다.
     ownership = {
-      -- 황건적 봉기지(기/청/연/예/형/서 일부)
+      -- 황건적 봉기지(기/청/연/예/형/서 일부) — 부장 추가 배치로 채운 7지역
       ye = "yellowturban", pingyuan = "yellowturban", puyang = "yellowturban",
       runan = "yellowturban", xinye = "yellowturban",
-      pengcheng = "yellowturban", xiapi = "yellowturban", guangling = "yellowturban",
-      -- 동탁(서량 동부·관중)
-      wuwei = "dongzhuo", changan = "dongzhuo",
+      pengcheng = "yellowturban", xiapi = "yellowturban",
+      -- 동탁(관중) — 무위는 채울 장수 없음 → 중립
+      changan = "dongzhuo",
       -- 마등(서량 천수)
       tianshui = "mateng",
-      -- 유언(익주)
-      chengdu = "liuyan", jiangzhou = "liuyan", yunnan = "liuyan", hanzhong = "liuyan",
+      -- 유언(익주 본거지만) — 강주·운남·한중은 184 배치 인물 없음 → 중립
+      chengdu = "liuyan",
       -- 하진(대장군, 낙양 중앙·예주)
       luoyang = "hejin", hongnong = "hejin", chenliu = "hejin", xuchang = "hejin",
       -- 정원(병주)
       jinyang = "dingyuan",
-      -- 공손찬(유주)
+      -- 공손찬(유주) — 발해는 공손월 배치로 채움
       beiping = "gongsunzan", bohai = "gongsunzan",
-      -- 손견(강동 부춘 출신 + 형남)
+      -- 손견(형남) — 강동 4지역(건업·오군·회계·시상)은 184 배치 인물 없음 → 중립
       changsha = "sunjian", wuling = "sunjian", jiangling = "sunjian", xiangyang = "sunjian",
-      jianye = "sunjian", wujun = "sunjian", kuaiji = "sunjian", chaisang = "sunjian",
     },
     -- 초기 장비 배치 (GDD 8장). 각 항목: 장비 id → owner(그 세력 군주 장수 id).
     --   equipped 미지정(=false) → 군주 "미장착" 장비고에 들어가 선물 대상이 된다.
@@ -375,6 +396,21 @@ game_data.scenarios = {
       { id = "red_hare",      owner = "gongsunzan" }, -- 백마장군
       { id = "jade_seal",     owner = "sunjian"    }, -- 손견: 옥새(고증)
     },
+    -- 초기 금·군량 override (GDD 9장). 미기재 지역은 regions base 기본값 사용.
+    --   거병 직후라 전반적으로 base 보다 여유 적게(전란) — 핵심 거점만 소폭 조정.
+    regionInit = {
+      luoyang = { gold = 1300, grain = 3600 }, -- 한실 중앙(하진)
+      ye      = { gold = 700,  grain = 2000 }, -- 황건 봉기지(약탈로 피폐)
+    },
+    -- 세력 간 기본 적대치(연의 기반, 단계 문자열 — GDD 6장 외교). 미기재 쌍 = 중립.
+    --   184: 황건적이 전 군웅과 적대. 그 외는 아직 본격 대립 전이라 대체로 중립.
+    hostility = {
+      yellowturban = { dongzhuo = "hostile", mateng = "hostile", liuyan = "hostile",
+                       hejin = "hostile", dingyuan = "hostile", gongsunzan = "hostile", sunjian = "hostile" },
+      dongzhuo = { yellowturban = "hostile", hejin = "hostile" }, -- 동탁 vs 조정(하진)
+      hejin    = { yellowturban = "hostile", dongzhuo = "hostile" },
+      dingyuan = { yellowturban = "hostile", dongzhuo = "hostile" }, -- 정원 vs 동탁
+    },
     -- 장수 초기 배치 (GDD 4·7장). 각 항목: 장수 id → 소속/위치/충성/상태.
     --   state="active": 세력 소속 → region 은 반드시 그 faction 소유 지역(위 ownership).
     --   state="free"  : 재야 → 임의 지역에 숨음(인재 탐색으로 발견, GDD 10장). faction 없음.
@@ -386,6 +422,9 @@ game_data.scenarios = {
       { id = "zhangbao",   faction = "yellowturban", region = "pingyuan", state = "active", loyalty = 90 },
       { id = "zhangliang", faction = "yellowturban", region = "puyang",   state = "active", loyalty = 88 },
       { id = "bocai",      faction = "yellowturban", region = "runan",    state = "active", loyalty = 70 },
+      { id = "zhangmancheng", faction = "yellowturban", region = "xinye",     state = "active", loyalty = 72 },
+      { id = "mayuanyi",   faction = "yellowturban", region = "pengcheng", state = "active", loyalty = 68 },
+      { id = "buji",       faction = "yellowturban", region = "xiapi",     state = "active", loyalty = 70 },
       -- 동탁
       { id = "dongzhuo",   faction = "dongzhuo",     region = "changan",  state = "active" },
       -- 마등
@@ -404,8 +443,9 @@ game_data.scenarios = {
       { id = "dingyuan",   faction = "dingyuan",     region = "jinyang",  state = "active" },
       { id = "lvbu",       faction = "dingyuan",     region = "jinyang",  state = "active", loyalty = 60 },
       { id = "zhangliao",  faction = "dingyuan",     region = "jinyang",  state = "active", loyalty = 78 },
-      -- 공손찬
+      -- 공손찬 — 발해는 사촌 공손월이 지킴
       { id = "gongsunzan", faction = "gongsunzan",   region = "beiping",  state = "active" },
+      { id = "gongsunyue", faction = "gongsunzan",   region = "bohai",    state = "active", loyalty = 88 },
       -- 손견(강동·형남)
       { id = "sunjian",    faction = "sunjian",      region = "changsha", state = "active" },
       { id = "huanggai",   faction = "sunjian",      region = "wuling",   state = "active", loyalty = 90 },
@@ -463,9 +503,9 @@ game_data.scenarios = {
       tianshui = "mateng", wuwei = "mateng",
       runan = "yuanshu",
       xinye = "liubiao", xiangyang = "liubiao", jiangling = "liubiao",
-      wuling = "liubiao", changsha = "liubiao",
+      changsha = "liubiao", -- 무릉(형남 변경)은 배치 인물 없음 → 중립
       jianye = "sunce", wujun = "sunce", kuaiji = "sunce", chaisang = "sunce",
-      chengdu = "liuzhang", jiangzhou = "liuzhang", yunnan = "liuzhang",
+      chengdu = "liuzhang", jiangzhou = "liuzhang", -- 운남(남중)은 배치 인물 없음 → 중립
       hanzhong = "zhanglu",
     },
     -- 초기 장비 배치 (GDD 8장). 군주 귀속 미장착 장비고(선물 대상). owner = 세력 군주.
@@ -482,6 +522,26 @@ game_data.scenarios = {
       { id = "shu_map",         owner = "liuzhang"   }, -- 익주
       { id = "dunjia_man",      owner = "zhanglu"    }, -- 오두미도
     },
+    -- 초기 금·군량 override (GDD 9장). 미기재 지역은 regions base 기본값.
+    regionInit = {
+      ye      = { gold = 1400, grain = 3800 }, -- 원소 본거지(하북 부유)
+      puyang  = { gold = 900,  grain = 2600 }, -- 조조 거점
+      chengdu = { gold = 1500, grain = 4000 }, -- 유장(익주 풍요)
+    },
+    -- 세력 간 기본 적대치(연의 기반 — GDD 6장 외교). 미기재 쌍 = 중립.
+    --   194 군웅할거: 주요 대립쌍만 적대로. (원소-공손찬, 조조-원술/도겸 등)
+    hostility = {
+      yuanshao   = { gongsunzan = "hostile", yuanshu = "hostile" }, -- 하북 패권 + 원씨 형제 반목
+      gongsunzan = { yuanshao = "hostile" },
+      caocao     = { yuanshu = "hostile", taoqian = "hostile", licaoguo = "hostile" }, -- 서주·관중·회남
+      taoqian    = { caocao = "hostile" },
+      yuanshu    = { caocao = "hostile", yuanshao = "hostile", sunce = "hostile" }, -- 손책 독립
+      sunce      = { yuanshu = "hostile", liubiao = "hostile" }, -- 황조(유표)와 부친 원수
+      liubiao    = { sunce = "hostile" },
+      licaoguo   = { caocao = "hostile" },
+      liuzhang   = { zhanglu = "hostile" }, -- 익주 vs 한중
+      zhanglu    = { liuzhang = "hostile" },
+    },
     -- 장수 초기 배치 (GDD 4·7장). 184 의 무명 영웅들이 이제 각 세력에 자리잡았다.
     officers = {
       -- 원소(하북)
@@ -493,7 +553,7 @@ game_data.scenarios = {
       { id = "guotu",      faction = "yuanshao",   region = "ye",       state = "active", loyalty = 75 },
       { id = "xunchen",    faction = "yuanshao",   region = "bohai",    state = "active", loyalty = 82 },
       { id = "xinping",    faction = "yuanshao",   region = "pingyuan", state = "active", loyalty = 78 },
-      { id = "zhanghe",    faction = "yuanshao",   region = "ye",       state = "active", loyalty = 85 },
+      { id = "zhanghe",    faction = "yuanshao",   region = "jinyang",  state = "active", loyalty = 85 }, -- 병주 방면 분산
       { id = "chunyuqiong",faction = "yuanshao",   region = "ye",       state = "active", loyalty = 80 },
       -- 공손찬(유주)
       { id = "gongsunzan", faction = "gongsunzan", region = "beiping",  state = "active" },
@@ -531,7 +591,7 @@ game_data.scenarios = {
       { id = "guosi",      faction = "licaoguo",   region = "changan",  state = "active", loyalty = 80 },
       { id = "zhangji",    faction = "licaoguo",   region = "hongnong", state = "active", loyalty = 70 },
       { id = "fanchou",    faction = "licaoguo",   region = "changan",  state = "active", loyalty = 65 },
-      { id = "niufu",      faction = "licaoguo",   region = "hongnong", state = "active", loyalty = 65 },
+      { id = "niufu",      faction = "licaoguo",   region = "luoyang",  state = "active", loyalty = 65 }, -- 낙양 수비로 분산
       { id = "liru",       faction = "licaoguo",   region = "changan",  state = "active", loyalty = 80 },
       { id = "jiaxu",      faction = "licaoguo",   region = "changan",  state = "active", loyalty = 60 },
       -- 마등·한수(서량)
@@ -545,7 +605,7 @@ game_data.scenarios = {
       { id = "huangzu",    faction = "liubiao",    region = "jiangling",state = "active", loyalty = 80 },
       { id = "caimao",     faction = "liubiao",    region = "xiangyang",state = "active", loyalty = 75 },
       { id = "kuailiang",  faction = "liubiao",    region = "xiangyang",state = "active", loyalty = 82 },
-      { id = "kuaiyue",    faction = "liubiao",    region = "xiangyang",state = "active", loyalty = 84 },
+      { id = "kuaiyue",    faction = "liubiao",    region = "xinye",    state = "active", loyalty = 84 }, -- 신야 방면 분산
       { id = "huangzhong", faction = "liubiao",    region = "changsha", state = "active", loyalty = 80 },
       -- 손책(강동)
       { id = "sunce",      faction = "sunce",      region = "jianye",   state = "active" },
@@ -597,17 +657,30 @@ game_data.scenarios = {
       jinyang = "wei", bohai = "wei", beiping = "wei", ye = "wei", pingyuan = "wei",
       puyang = "wei", changan = "wei", hongnong = "wei", luoyang = "wei",
       chenliu = "wei", xuchang = "wei", runan = "wei",
-      -- 촉: 익주·한중
-      hanzhong = "shu", chengdu = "shu", jiangzhou = "shu", yunnan = "shu",
+      -- 촉: 익주·한중 (운남=남중은 221 시점 미평정 → 중립)
+      hanzhong = "shu", chengdu = "shu", jiangzhou = "shu",
       -- 오: 강동
       jianye = "wu", chaisang = "wu", wujun = "wu", kuaiji = "wu",
-      -- 나머지(무위·천수·하비·팽성·신야·양양·광릉·강릉·무릉·장사)는 중립(미기재)
+      -- 나머지(무위·천수·하비·팽성·신야·양양·광릉·강릉·무릉·장사·운남)는 중립(미기재)
     },
     -- 초기 장비 배치 (GDD 8장). 군주 귀속 미장착 장비고(선물 대상). owner = 세력 군주.
     equipment = {
       { id = "bronze_sparrow", owner = "caopi"   }, -- 위: 동작대(구리 참새)
       { id = "dilu",           owner = "liubei"  }, -- 촉: 적로(고증)
       { id = "ancient_blade",  owner = "sunquan" }, -- 오: 고정도(손견 유물)
+    },
+    -- 초기 금·군량 override (GDD 9장). 삼국 정립 — 3국 수도는 풍요. 미기재는 base.
+    regionInit = {
+      luoyang = { gold = 1600, grain = 4200 }, -- 위 수도(낙양)
+      chengdu = { gold = 1500, grain = 4000 }, -- 촉 수도(성도)
+      jianye  = { gold = 1400, grain = 3600 }, -- 오 수도(건업)
+    },
+    -- 세력 간 기본 적대치(GDD 6장 외교). 221 이릉대전 시점 — 3국 상호 적대.
+    --   위↔촉(한적 불공대천), 위↔오, 촉↔오(형주·이릉) 모두 적대.
+    hostility = {
+      wei = { shu = "hostile", wu = "hostile" },
+      shu = { wei = "hostile", wu = "hostile" },
+      wu  = { wei = "hostile", shu = "hostile" },
     },
     -- 장수 초기 배치 (GDD 4·7장). 삼국 정립기 — 1세대 군웅은 떠나고 위·촉·오 3국이 굳었다.
     --   변경 중립 지역(무위·천수·하비 등)은 장수 없이 비어 있을 수 있다(GDD: 지역 0명 허용).
@@ -630,12 +703,14 @@ game_data.scenarios = {
       { id = "jiakui",     faction = "wei", region = "chenliu",  state = "active", loyalty = 82 },
       { id = "manchong",   faction = "wei", region = "xuchang",  state = "active", loyalty = 80 },
       { id = "tianyu",     faction = "wei", region = "beiping",  state = "active", loyalty = 78 },
-      { id = "dongzhao",   faction = "wei", region = "luoyang",  state = "active", loyalty = 80 },
+      { id = "dongzhao",   faction = "wei", region = "hongnong", state = "active", loyalty = 80 }, -- 홍농 분산
       { id = "liuye",      faction = "wei", region = "luoyang",  state = "active", loyalty = 82 },
-      { id = "chenqun",    faction = "wei", region = "luoyang",  state = "active", loyalty = 85 },
-      { id = "huaxin",     faction = "wei", region = "luoyang",  state = "active", loyalty = 82 },
-      { id = "wanglang",   faction = "wei", region = "luoyang",  state = "active", loyalty = 82 },
+      { id = "chenqun",    faction = "wei", region = "pingyuan", state = "active", loyalty = 85 }, -- 평원 분산
+      { id = "huaxin",     faction = "wei", region = "bohai",    state = "active", loyalty = 82 }, -- 발해 분산
+      { id = "wanglang",   faction = "wei", region = "jinyang",  state = "active", loyalty = 82 }, -- 진양(병주) 분산
       { id = "zhongyou",   faction = "wei", region = "changan",  state = "active", loyalty = 84 },
+      { id = "haozhao",    faction = "wei", region = "changan",  state = "active", loyalty = 80 }, -- 진창 방면
+      { id = "caozhang",   faction = "wei", region = "ye",       state = "active", loyalty = 84 }, -- 종친 맹장
       { id = "caozhi",     faction = "wei", region = "ye",       state = "active", loyalty = 70 },
       { id = "xinpi",      faction = "wei", region = "ye",       state = "active", loyalty = 80 },
       { id = "zangba",     faction = "wei", region = "xuchang",  state = "active", loyalty = 70 },
@@ -658,8 +733,15 @@ game_data.scenarios = {
       { id = "jianyong",   faction = "shu", region = "chengdu",  state = "active", loyalty = 85 },
       { id = "chenzhen",   faction = "shu", region = "chengdu",  state = "active", loyalty = 82 },
       { id = "yanyan",     faction = "shu", region = "jiangzhou",state = "active", loyalty = 75 },
+      { id = "wangping",   faction = "shu", region = "hanzhong", state = "active", loyalty = 82 },
+      { id = "zhangyi",    faction = "shu", region = "chengdu",  state = "active", loyalty = 80 },
+      { id = "machong",    faction = "shu", region = "jiangzhou",state = "active", loyalty = 80 },
+      { id = "dengzhi",    faction = "shu", region = "chengdu",  state = "active", loyalty = 84 },
       -- 오(손권) — 강동
       { id = "sunquan",    faction = "wu",  region = "jianye",   state = "active" },
+      { id = "zhuhuan",    faction = "wu",  region = "jianye",   state = "active", loyalty = 80 },
+      { id = "quancong",   faction = "wu",  region = "wujun",    state = "active", loyalty = 80 },
+      { id = "zhuzhi",     faction = "wu",  region = "chaisang", state = "active", loyalty = 82 },
       { id = "luxun",      faction = "wu",  region = "jianye",   state = "active", loyalty = 88 },
       { id = "zhuran",     faction = "wu",  region = "jianye",   state = "active", loyalty = 82 },
       { id = "xusheng",    faction = "wu",  region = "jianye",   state = "active", loyalty = 80 },

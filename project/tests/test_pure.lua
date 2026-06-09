@@ -184,19 +184,20 @@ do
   check(badOwnKey == 0, "ownership 키 = 실재 지역")
   check(badOwnVal == 0, "ownership 값 = 실재 세력")
 
-  -- 194 군웅할거는 전 지역 소유(중립 없음) — 11세력 분할 검증.
+  -- 소유 지역 수는 30 이하(배치 우선 정합성으로 일부는 중립 — GDD 6장).
+  --   194 는 채울 인물이 많아 대부분 소유, 184 는 무명 시대라 중립이 더 많다.
   local warlords
   for _, sc in ipairs(scenarios) do if sc.id == "warlords" then warlords = sc end end
   local owned = 0
   for _ in pairs(warlords.ownership) do owned = owned + 1 end
-  check(owned == 30, "194 전 지역 소유 (실제=" .. owned .. ")")
+  check(owned >= 1 and owned <= 30, "194 소유 지역 1~30 (실제=" .. owned .. ")")
 
-  -- 184 황건의 난도 전 지역 분할(한 관군 제거, 군벌 배치). 'han' 세력 없어야.
+  -- 184 황건의 난(한 관군 제거, 군벌 배치). 'han' 세력 없어야. 소유는 일부(나머지 중립).
   local yt
   for _, sc in ipairs(scenarios) do if sc.id == "yellow_turban" then yt = sc end end
   local owned184 = 0
   for _ in pairs(yt.ownership) do owned184 = owned184 + 1 end
-  check(owned184 == 30, "184 전 지역 소유 (실제=" .. owned184 .. ")")
+  check(owned184 >= 1 and owned184 < 30, "184 일부 소유+일부 중립 (실제=" .. owned184 .. ")")
   check(yt.factions.han == nil, "184 한 관군 세력 제거됨")
 end
 
@@ -548,6 +549,212 @@ do
   check(GameState.canGiftEquip(target) == false, "이미 장착 → 장비 선물 불가")
   -- 수장 → 불가.
   check(GameState.canGiftEquip({ isLord = true }) == false, "수장 → 장비 선물 불가")
+end
+
+-- ── 지역 base 내부수치 무결성 (GDD 5장) ──────────────────
+do
+  local bad = 0
+  for _, r in ipairs(game_data.regions) do
+    local function num(v) return type(v) == "number" end
+    if not (num(r.pop) and num(r.commerce) and num(r.land) and num(r.loyal)
+        and num(r.flood) and num(r.gold) and num(r.grain)) then
+      bad = bad + 1; print("  [region field] " .. tostring(r.id))
+    end
+  end
+  check(bad == 0, "지역 base 내부수치(인구/상업/토지/민충성/치수/금/군량) 전부 존재")
+end
+
+-- ── buildRegions: base 복사 + regionInit override (GDD 5·9장) ──
+do
+  local sc = game_data.scenarios[3] -- three_kingdoms
+  local rs = GameState.buildRegions(game_data, sc)
+
+  -- 모든 지역상태가 생성되고 내부수치가 base 에서 복사됐는지(낙양 표본).
+  local ly = rs.luoyang
+  local base = Region.byId(game_data.regions, "luoyang")
+  check(ly ~= nil and ly.commerce == base.commerce and ly.land == base.land, "buildRegions base 내부수치 복사")
+
+  -- regionInit override 반영: 221 낙양 gold=1600, grain=4200.
+  check(ly.gold == 1600 and ly.grain == 4200, "buildRegions regionInit override(낙양 금·군량)")
+
+  -- override 없는 지역은 base 값(무위는 221 regionInit 미기재).
+  local wuweiBase = Region.byId(game_data.regions, "wuwei")
+  check(rs.wuwei.gold == wuweiBase.gold, "buildRegions override 없으면 base 금")
+
+  -- 원본 불변: 런타임 gold 를 바꿔도 game_data.regions 의 base 는 그대로.
+  rs.luoyang.gold = 0
+  check(Region.byId(game_data.regions, "luoyang").gold == 1500, "buildRegions 원본 base 불변")
+end
+
+-- ── 세금/수확 공식 (game_state, GDD 9장) ─────────────────
+do
+  -- 통제된 지역으로 공식 검증(계수는 config.economy).
+  local region = { commerce = 100, land = 100, loyal = 100, flood = 100, gold = 0, grain = 0 }
+  local e = config.economy
+
+  -- 세금(태수 없음) = (100*taxCommerce + 100*taxLand) * 1.0 * 1.0.
+  local expectTaxNoGov = math.floor((100 * e.taxCommerce + 100 * e.taxLand) * 1.0 * 1.0)
+  check(GameState.calcTax(region, nil) == expectTaxNoGov, "calcTax 태수없음")
+
+  -- 태수 정치 반영 → 세금 증가(정치 100).
+  local gov = { pol = 100 }
+  local taxGov = GameState.calcTax(region, gov)
+  check(taxGov > expectTaxNoGov, "calcTax 태수 정치 높을수록 ↑")
+  check(taxGov == math.floor((100 * e.taxCommerce + 100 * e.taxLand) * 1.0 * (1 + 100 * e.taxPolBonus)),
+    "calcTax 정치 배수 공식")
+
+  -- 정수 반환.
+  check(GameState.calcTax(region, nil) % 1 == 0, "calcTax 정수")
+
+  -- 수확(태수없음) = (100*harvestLand + 100*harvestFlood) * 1.0.
+  local expectHarvest = math.floor((100 * e.harvestLand + 100 * e.harvestFlood) * 1.0 * 1.0)
+  check(GameState.calcHarvest(region, nil) == expectHarvest, "calcHarvest 태수없음")
+  check(GameState.calcHarvest(region, gov) > expectHarvest, "calcHarvest 태수 정치 ↑")
+
+  -- 민충성 낮으면 세금/수확 감소(0이면 0).
+  local low = { commerce = 100, land = 100, loyal = 0, flood = 100 }
+  check(GameState.calcTax(low, nil) == 0, "calcTax 민충성0 → 0")
+  check(GameState.calcHarvest(low, nil) == 0, "calcHarvest 민충성0 → 0")
+end
+
+-- ── collectTaxes / harvestAll: 소유 지역만 가산 (GDD 9장) ──
+do
+  local sc = game_data.scenarios[3] -- three_kingdoms (변경 중립 다수)
+  local rs = GameState.buildRegions(game_data, sc)
+  local officers = GameState.buildOfficers(game_data, sc)
+  local governors = GameState.assignGovernors(game_data.regions, officers, function() return 1 end)
+
+  -- 소유 지역(낙양=위)과 중립 지역(무위) 표본의 징수 전 금.
+  local luoyangBefore = rs.luoyang.gold
+  local wuweiBefore = rs.wuwei.gold -- 221 무위는 중립(ownership 미기재)
+
+  GameState.collectTaxes(rs, governors, officers, sc.ownership)
+
+  check(rs.luoyang.gold > luoyangBefore, "collectTaxes 소유 지역 금 증가")
+  check(rs.wuwei.gold == wuweiBefore, "collectTaxes 중립 지역 금 불변")
+
+  -- 수확: 소유 지역 군량 증가, 중립 불변.
+  local luoyangGrain = rs.luoyang.grain
+  local wuweiGrain = rs.wuwei.grain
+  GameState.harvestAll(rs, governors, officers, sc.ownership)
+  check(rs.luoyang.grain > luoyangGrain, "harvestAll 소유 지역 군량 증가")
+  check(rs.wuwei.grain == wuweiGrain, "harvestAll 중립 지역 군량 불변")
+end
+
+-- ── 적대치 조회 (game_state, GDD 6장 외교) ───────────────
+do
+  local tk = game_data.scenarios[3] -- 221: wei/shu/wu 상호 적대
+  local H = config.hostility.tier
+
+  -- 본인 소유 지역 → nil('-').
+  check(GameState.getHostility(tk, "wei", "wei") == nil, "getHostility 본인 → nil")
+  -- 중립(소유 nil) → nil('-').
+  check(GameState.getHostility(tk, nil, "wei") == nil, "getHostility 중립 → nil")
+  -- 적 세력 소유 → 단계 수치(위→촉 적대=hostile).
+  check(GameState.getHostility(tk, "shu", "wei") == H.hostile, "getHostility 적 세력 → 적대 수치")
+
+  -- 미기재 세력 쌍은 중립(184 황건적-동탁은 적대지만, 마등-유언은 미기재 → 중립).
+  local yt = game_data.scenarios[1] -- yellow_turban
+  check(GameState.getHostility(yt, "yellowturban", "dongzhuo") == H.hostile, "getHostility 184 황건적→동탁 적대")
+  check(GameState.getHostility(yt, "mateng", "liuyan") == H.neutral, "getHostility 미기재 쌍 → 중립")
+end
+
+-- ── 군주 소재 지역 + 금 선물 풀 (GDD 9·15장) ─────────────
+do
+  local sc = game_data.scenarios[3]
+  local officers = GameState.buildOfficers(game_data, sc)
+  local rs = GameState.buildRegions(game_data, sc)
+
+  -- 위 군주(caopi)는 낙양에 위치 → lordRegionId = luoyang.
+  local rid = GameState.lordRegionId(officers, "wei", sc)
+  check(rid == "luoyang", "lordRegionId 위 군주 = 낙양")
+
+  -- 금 선물이 그 지역 금 풀에서 차감되는 흐름(canGiftGold/applyGiftGold 숫자 in/out 유지).
+  local pool = rs[rid]
+  local target = nil
+  for _, o in ipairs(officers) do
+    if o.faction == "wei" and not o.isLord and o.state == GameState.STATE.active then target = o; break end
+  end
+  local before = pool.gold
+  local ok = GameState.canGiftGold(pool.gold, target, 3)
+  check(ok == true, "canGiftGold 군주 지역 금 충분")
+  pool.gold = GameState.applyGiftGold(pool.gold, target, 3)
+  check(pool.gold == before - 3, "applyGiftGold 군주 지역 금에서 차감")
+end
+
+-- ── 장수 풀 규모 (GDD 7장: 180~200) ─────────────────────
+do
+  local n = #game_data.officers
+  check(n >= 180 and n <= 200, "장수 풀 180~200 범위 (현재 " .. n .. ")")
+end
+
+-- ── 소유↔배치 정합성: regionActiveCount (GDD 6장) ────────
+do
+  local sc = game_data.scenarios[3] -- 221
+  local officers = GameState.buildOfficers(game_data, sc)
+  -- 위 군주 조비가 낙양에 active → 낙양의 wei active ≥1.
+  check(GameState.regionActiveCount(officers, "luoyang", "wei") >= 1, "regionActiveCount 위 낙양 ≥1")
+  -- 운남은 221 에 아무도 배치 안 됨 → shu active 0.
+  check(GameState.regionActiveCount(officers, "yunnan", "shu") == 0, "regionActiveCount 운남 shu 0")
+  -- 세력이 다르면 카운트 안 됨(낙양의 shu active 는 0).
+  check(GameState.regionActiveCount(officers, "luoyang", "shu") == 0, "regionActiveCount 타 세력 0")
+end
+
+-- ── normalizeOwnership: 강등 + 원본 불변 (GDD 6장) ───────
+do
+  -- 인위 시나리오: 한 지역(alpha)은 active 있음, 다른 지역(beta)은 소유인데 active 0.
+  local fakeOfficers = {
+    { id = "x", faction = "f1", region = "alpha", state = GameState.STATE.active },
+  }
+  local fakeScenario = { ownership = { alpha = "f1", beta = "f1" } }
+  local own, demoted = GameState.normalizeOwnership(fakeScenario, fakeOfficers)
+  check(own.alpha == "f1", "normalizeOwnership active 있는 소유 유지")
+  check(own.beta == nil, "normalizeOwnership active 0 소유 → 중립 제거")
+  check(#demoted == 1 and demoted[1].region == "beta" and demoted[1].faction == "f1",
+        "normalizeOwnership 강등 목록 기록")
+  -- 원본 ownership 은 그대로(복사본만 수정).
+  check(fakeScenario.ownership.beta == "f1", "normalizeOwnership 원본 불변")
+
+  -- 실제 시나리오 3개: 정규화 후 남은 소유 지역은 모두 그 세력 active ≥1 (0명 세력 지역 0건).
+  for si, sc in ipairs(game_data.scenarios) do
+    local officers = GameState.buildOfficers(game_data, sc)
+    local own2 = GameState.normalizeOwnership(sc, officers)
+    local allStaffed = true
+    for regionId, fid in pairs(own2) do
+      if GameState.regionActiveCount(officers, regionId, fid) < 1 then allStaffed = false end
+    end
+    check(allStaffed, "시나리오 " .. si .. " 정규화 후 소유 지역 active ≥1")
+
+    -- 자기 세력 외 active 배치 0건: 모든 active 장수의 위치는 자기 세력 소유 지역.
+    --   (정규화 후 own2 기준 — active 가 있으면 그 지역은 강등되지 않으므로 own2 에 남아 있어야 함)
+    local noForeign = true
+    for _, o in ipairs(officers) do
+      if o.state == GameState.STATE.active and o.faction then
+        if own2[o.region] ~= o.faction then noForeign = false end
+      end
+    end
+    check(noForeign, "시나리오 " .. si .. " active 자기 세력 지역에만 배치")
+  end
+end
+
+-- ── demoteIfVacant: 런타임 강등 + 태수 해제 (GDD 6장) ────
+do
+  -- gamma 지역에 f1 active 0명 → 강등되며 태수도 해제돼야 한다.
+  local officers = {} -- gamma 에 아무도 없음
+  local ownership = { gamma = "f1" }
+  local governors = { gamma = "someone" }
+  local changed = GameState.demoteIfVacant(ownership, governors, officers, "gamma")
+  check(changed == true, "demoteIfVacant active 0 → 강등 true")
+  check(ownership.gamma == nil, "demoteIfVacant 소유 해제(중립)")
+  check(governors.gamma == nil, "demoteIfVacant 태수 해제")
+
+  -- active 가 있으면 강등 안 함.
+  local officers2 = { { id = "y", faction = "f1", region = "delta", state = GameState.STATE.active } }
+  local ownership2 = { delta = "f1" }
+  local governors2 = { delta = "y" }
+  local changed2 = GameState.demoteIfVacant(ownership2, governors2, officers2, "delta")
+  check(changed2 == false, "demoteIfVacant active 있으면 유지 false")
+  check(ownership2.delta == "f1", "demoteIfVacant 유지 시 소유 보존")
 end
 
 -- ── 결과 ─────────────────────────────────────────────────
