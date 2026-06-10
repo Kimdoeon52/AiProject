@@ -97,6 +97,12 @@ function GameState.buildOfficers(gameData, scenario)
       local faction = place.faction and scenario.factions[place.faction] or nil
       -- 군주(lord) 여부: 그 세력의 lord 가 이 장수면 충성도는 '-'(GDD 7장).
       local isLord = faction ~= nil and faction.lord == place.id
+      -- 충성도: 군주만 '-'(nil), 그 외(일반 active·재야)는 배치값 그대로.
+      --   ── 왜 명시적 if 인가: `isLord and nil or place.loyalty` 는 Lua and/or 단축평가의
+      --      함정(수장인데 place.loyalty 가 있으면 그 값이 새는 등)이 있어 분기로 못 박는다.
+      --      (C#/C++ 의 삼항 `cond ? a : b` 와 달리 Lua 의 `c and a or b` 는 a 가 nil/false 면 b 로 샘)
+      local loyalty
+      if isLord then loyalty = nil else loyalty = place.loyalty end
 
       out[#out + 1] = {
         -- 베이스에서 복사하는 정적 값
@@ -108,8 +114,7 @@ function GameState.buildOfficers(gameData, scenario)
         region = place.region,     -- 현재 위치 지역 id
         state = place.state,       -- GameState.STATE.* 중 하나
         isLord = isLord,           -- 군주면 true → 충성도 '-' 표기
-        -- 충성도: 군주는 '-'(nil), 그 외엔 배치값(재야는 보통 nil).
-        loyalty = isLord and nil or place.loyalty,
+        loyalty = loyalty,
         -- 런타임 진행 값(초기치). 게임 중 변한다.
         troops = 0,          -- 현재 보유 병력
         equip = nil,         -- 장착 장비(GDD 8장). 미구현 → 항상 nil(스텁)
@@ -118,6 +123,9 @@ function GameState.buildOfficers(gameData, scenario)
         -- 이번 턴 선물 수령 여부(턴 1회 제한, GDD 15장). 턴 시작 시 리셋.
         giftedGoldThisTurn = false,
         giftedEquipThisTurn = false,
+        -- 인재 탐색으로 "발견"됐는지(GDD 10장). free 장수에만 의미 — 발견돼야 등용 시도 가능.
+        --   처음엔 모두 숨어 있음(false) → 탐색 성공 시 그 지역 free 1명이 true 가 된다.
+        discovered = false,
       }
     end
   end
@@ -538,6 +546,11 @@ function GameState.buildRegions(gameData, scenario)
       -- override 있으면 그 값, 없으면 base. (Lua: a or b = a가 nil/false면 b)
       gold = ov.gold or r.gold,
       grain = ov.grain or r.grain,
+      -- 내정(GDD 10장) 턴 1회 제한 플래그. 턴 시작 시 resetRegionActions 로 리셋.
+      --   devDone[항목] = 이번 턴 그 항목에 이미 투자했는지(치수/민충성/상업/토지 각각).
+      --   searchDone    = 이번 턴 이 지역에서 이미 인재 탐색했는지.
+      devDone = { flood = false, loyal = false, commerce = false, land = false },
+      searchDone = false,
     }
   end
   return out
@@ -618,6 +631,22 @@ function GameState.harvestAll(regionState, governors, officers, ownership)
   return total
 end
 
+-- ── 내정 턴 1회 플래그 리셋 (GDD 10장) ───────────────────
+--   내정 "규칙"(투자/탐색/등용)은 develop.lua 로 분리(game_state 800줄 초과 → 책임 분리).
+--   단, 턴 1회 플래그 리셋은 advanceTurn 이 호출하므로 game_state 가 소유한다(순환 의존 방지).
+
+--- 모든 지역의 내정 턴 1회 플래그를 리셋한다(턴 시작 시 호출, advanceTurn).
+-- 부작용: 각 지역 devDone[*]=false, searchDone=false.
+--   GDD 10장: 투자/탐색은 지역당 턴 1회 → 장수 행동완료(resetActions)와 같은 지점에서 함께 리셋.
+-- @param regionState table  런타임 지역상태 맵 { [id]={..., devDone, searchDone} }
+function GameState.resetRegionActions(regionState)
+  for _, region in pairs(regionState) do
+    -- pairs(): 테이블 모든 키 순회(배열 아닌 맵). C# foreach(KeyValuePair) 와 유사.
+    for k in pairs(region.devDone) do region.devDone[k] = false end
+    region.searchDone = false
+  end
+end
+
 -- ── 외교/적대치 (GDD 6장 외교) ───────────────────────────
 --   세력 쌍(A→B) 적대 수준 0~100. 시나리오는 "단계 문자열"만 두고
 --   단계→수치 변환은 config.hostility.tier 한 곳에서(데이터 분산 방지).
@@ -644,18 +673,8 @@ function GameState.getHostility(scenario, ownerFid, playerFid)
   return tierToValue(tierName)
 end
 
---- 세력 군주(lord)가 현재 위치한 지역 id 를 찾는다 (선물 금 차감 풀 식별용).
--- 금 선물은 "군주가 위치한 지역의 금"에서 빠지므로, 그 지역을 알아야 한다(GDD 9·15장).
--- @param officers table   런타임 장수
--- @param factionId any    세력 id
--- @param scenario table   factions[fid].lord 조회
--- @return string|nil  군주 위치 지역 id (군주 없으면 nil)
-function GameState.lordRegionId(officers, factionId, scenario)
-  local f = scenario.factions[factionId]
-  if not f or not f.lord then return nil end
-  local lord = GameState.byId(officers, f.lord)
-  return lord and lord.region or nil
-end
+-- (금은 지역별 보유 단일 진실원본 — GDD 9장. "군주 소재 금"으로 풀을 찾던
+--  GameState.lordRegionId 는 폐기했다. 금을 쓰는 모든 행동은 그 행동 지역의 금을 쓴다.)
 
 -- ── 턴/달력 (GDD 3·9장) ──────────────────────────────────
 --   1턴 = 1개월. 12월 다음은 다음 해 1월.
@@ -695,7 +714,7 @@ end
 --
 -- 부작용: turn 테이블(year/month/count)을 직접 변경. ctx.officers 의 actionDone 리셋.
 -- @param turn table  GameState.newTurn 으로 만든 턴 상태(직접 변경됨)
--- @param ctx  table|nil  { officers?, onTurnEnd?, onArrivals?, onGrowth?, onAI?, onHarvest? }
+-- @param ctx  table|nil  { officers?, regionState?, onTurnEnd?, onArrivals?, onGrowth?, onAI?, onHarvest? }
 -- @return table  진행 후의 turn(편의상 반환)
 function GameState.advanceTurn(turn, ctx)
   ctx = ctx or {}
@@ -724,6 +743,8 @@ function GameState.advanceTurn(turn, ctx)
 
   -- 6. 장수 행동완료 리셋 — 새 턴이니 모든 장수가 다시 행동 가능.
   if ctx.officers then GameState.resetActions(ctx.officers) end
+  -- 6-b. 내정 턴 1회 플래그(투자/탐색) 리셋 — 빨간 비활성 버튼이 다시 활성으로(GDD 10장).
+  if ctx.regionState then GameState.resetRegionActions(ctx.regionState) end
 
   return turn
 end

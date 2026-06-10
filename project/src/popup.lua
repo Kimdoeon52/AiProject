@@ -138,10 +138,11 @@ local function detailOfficer(state)
   return state.detailId and GameState.byId(state.officers, state.detailId) or nil
 end
 
---- 금 선물이 차감하는 풀 = "군주가 위치한 지역"의 런타임 지역 레코드(없으면 nil).
---   금 진실원본은 지역별 보유(GDD 9장) → 세력 금고가 아니라 군주 소재 지역 금에서 뺀다.
-local function lordRegion(state)
-  local rid = GameState.lordRegionId(state.officers, state.playerFactionId, state.scenario)
+--- 금 선물이 차감하는 풀 = "명령을 수행하는 지역"(=장수 목록을 연 선택 지역)의 런타임 지역 레코드.
+--   금 진실원본은 지역별 보유(GDD 9장) → 군주 위치 특수취급 없이, 선물도 그 행동 지역 금에서 뺀다.
+--   (장수 목록은 selectedId 지역 장수만 보이므로, 선물 대상 장수도 이 지역에 있다.)
+local function commandRegion(state)
+  local rid = state.selectedId
   return rid and state.regionState and state.regionState[rid] or nil
 end
 
@@ -214,12 +215,8 @@ local function drawOfficerDetail(state, px, py, pw, ph)
   love.graphics.print("소속 세력: " .. officerFactionName(state, o), x, y); y = y + gap
   local r = o.region and Region.byId(state.regions, o.region)
   love.graphics.print("위치 지역: " .. (r and r.name or "-"), x, y); y = y + gap
-  love.graphics.print("상태: " .. (STATE_KR[o.state] or o.state), x, y); y = y + gap
-
-  -- 태수 여부(GDD 5장): 이 장수가 태수로 있는 지역 역조회.
-  local govRegion = state.governors and GameState.governorRegionOf(state.governors, o.id)
-  local govReg = govRegion and Region.byId(state.regions, govRegion)
-  love.graphics.print("태수: " .. (govReg and govReg.name or "—"), x, y); y = y + gap + 6
+  love.graphics.print("상태: " .. (STATE_KR[o.state] or o.state), x, y); y = y + gap + 6
+  -- (태수 정보는 장수 상세가 아니라 지역 정보 패널에만 표시한다 — drawRegionInfo.)
 
   -- GDD 8장 장비: 장비명 + 보너스 내역(없으면 "없음").
   if o.equip then
@@ -268,13 +265,13 @@ local function drawGiftGold(state, px, py, pw, ph)
   local pad, gap = config.popup.pad, config.popup.lineGap
   local x, y = px + pad, py + pad
 
-  -- 선물 풀 = 군주 소재 지역 금(GDD 9장). 없으면 0.
-  local pool = lordRegion(state)
+  -- 선물 풀 = 명령 수행 지역(선택 지역) 금(GDD 9장). 없으면 0.
+  local pool = commandRegion(state)
   local gold = pool and pool.gold or 0
 
   love.graphics.setColor(config.colors.text)
   love.graphics.print("금 선물 — " .. o.name, x, y); y = y + gap + 4
-  love.graphics.print("군주 소재 지역 금: " .. gold, x, y); y = y + gap
+  love.graphics.print("지역 금: " .. gold, x, y); y = y + gap
   -- 1금 = 충성 +5(GDD 15장). 선물 후 충성 미리보기(상한 클램프).
   local after = math.min(config.officer.maxLoyalty,
     (o.loyalty or 0) + state.giftAmount * config.gift.loyaltyPerGold)
@@ -289,7 +286,7 @@ local function drawGiftGold(state, px, py, pw, ph)
   love.graphics.setColor(config.colors.text)
   love.graphics.printf(state.giftAmount .. " 금", minus.x + minus.w, minus.y + 12, 220, "center")
 
-  -- 확정(금 부족이면 비활성). 풀 = 군주 소재 지역 금.
+  -- 확정(금 부족이면 비활성). 풀 = 명령 수행 지역(선택 지역) 금.
   local ok = GameState.canGiftGold(gold, o, state.giftAmount)
   if ok then
     UI.draw(confirm, { hovered = UI.hit(confirm, mx, my), accent = config.colors.selectBorder })
@@ -374,7 +371,8 @@ local function drawRegionInfo(state, px, py, pw, ph)
     if o.state == GameState.STATE.free then freeN = freeN + 1 end
     troops = troops + (o.troops or 0)
   end
-  line("인구", region.pop)
+  -- 인구는 만(萬) 단위 추상값(GDD 5장) → "N만"으로 표시(예: 72 → "72만").
+  line("인구", region.pop .. "만")
   line("병사", troops)
   line("현역 장수", activeN .. "명")
   line("재야 장수", freeN .. "명")
@@ -461,8 +459,8 @@ function Popup.consumeClick(state, x, y)
       state.giftAmount = math.min(config.gift.goldGiftMax, state.giftAmount + 1)
     elseif UI.hit(confirm, x, y) then
       local o = detailOfficer(state)
-      -- 금 차감 풀 = 군주 소재 지역 금(GDD 9장). 그 지역 금에서 빼고 다시 쓴다.
-      local pool = lordRegion(state)
+      -- 금 차감 풀 = 명령 수행 지역(선택 지역) 금(GDD 9장). 그 지역 금에서 빼고 다시 쓴다.
+      local pool = commandRegion(state)
       local gold = pool and pool.gold or 0
       local ok, reason = GameState.canGiftGold(gold, o, state.giftAmount)
       if ok and pool then
@@ -471,7 +469,7 @@ function Popup.consumeClick(state, x, y)
         state.sub = nil
         state.notice = nil
       else
-        state.notice = reason or "군주 소재 지역 금 없음" -- 예: "금 부족"
+        state.notice = reason or "지역 금 없음" -- 예: "금 부족"
       end
     end
     return true

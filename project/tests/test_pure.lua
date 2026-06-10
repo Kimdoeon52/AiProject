@@ -19,6 +19,7 @@ local Hex = require("hex")
 local Region = require("region")
 local game_data = require("game_data")
 local GameState = require("game_state")
+local Develop = require("develop")
 local config = require("config")
 
 local passed, failed = 0, 0
@@ -659,27 +660,27 @@ do
   check(GameState.getHostility(yt, "mateng", "liuyan") == H.neutral, "getHostility 미기재 쌍 → 중립")
 end
 
--- ── 군주 소재 지역 + 금 선물 풀 (GDD 9·15장) ─────────────
+-- ── 금 선물 = 지역 금에서 차감 (GDD 9·15장 — 지역별 보유 단일) ───
 do
   local sc = game_data.scenarios[3]
   local officers = GameState.buildOfficers(game_data, sc)
   local rs = GameState.buildRegions(game_data, sc)
 
-  -- 위 군주(caopi)는 낙양에 위치 → lordRegionId = luoyang.
-  local rid = GameState.lordRegionId(officers, "wei", sc)
-  check(rid == "luoyang", "lordRegionId 위 군주 = 낙양")
-
-  -- 금 선물이 그 지역 금 풀에서 차감되는 흐름(canGiftGold/applyGiftGold 숫자 in/out 유지).
-  local pool = rs[rid]
+  -- 금은 지역별 보유 단일 진실원본(GDD 9장) — "군주 소재 금" 개념 없음.
+  --   선물은 명령 수행 지역(=장수가 있는 지역) 금에서 차감되는 흐름(canGiftGold/applyGiftGold 숫자 in/out).
   local target = nil
   for _, o in ipairs(officers) do
     if o.faction == "wei" and not o.isLord and o.state == GameState.STATE.active then target = o; break end
   end
+  local pool = rs[target.region] -- 그 장수가 있는 지역의 금이 풀
   local before = pool.gold
   local ok = GameState.canGiftGold(pool.gold, target, 3)
-  check(ok == true, "canGiftGold 군주 지역 금 충분")
+  check(ok == true, "canGiftGold 지역 금 충분")
   pool.gold = GameState.applyGiftGold(pool.gold, target, 3)
-  check(pool.gold == before - 3, "applyGiftGold 군주 지역 금에서 차감")
+  check(pool.gold == before - 3, "applyGiftGold 지역 금에서 차감")
+
+  -- lordRegionId 는 폐기됨 — 더 이상 존재하지 않아야(군주 소재 금 개념 제거).
+  check(GameState.lordRegionId == nil, "lordRegionId 폐기(군주 소재 금 개념 제거)")
 end
 
 -- ── 장수 풀 규모 (GDD 7장: 180~200) ─────────────────────
@@ -755,6 +756,261 @@ do
   local changed2 = GameState.demoteIfVacant(ownership2, governors2, officers2, "delta")
   check(changed2 == false, "demoteIfVacant active 있으면 유지 false")
   check(ownership2.delta == "f1", "demoteIfVacant 유지 시 소유 보존")
+end
+
+-- ── 내정: 투자 4종 (game_state, GDD 10장) ────────────────
+do
+  local S = GameState.STATE
+  local d = config.develop
+
+  -- developGain: 정치 높을수록 상승량 ↑(같은 투자금). 공식 = floor(amount*perGold*(1+pol*polBonus)).
+  local gainNoGov = Develop.developGain(200, nil)        -- 정치 0
+  local gainLowPol = Develop.developGain(200, { pol = 40 })
+  local gainHighPol = Develop.developGain(200, { pol = 100 })
+  check(gainNoGov == math.floor(200 * d.perGold * 1.0), "developGain 정치없음 공식")
+  check(gainHighPol > gainLowPol and gainLowPol > gainNoGov, "developGain 정치 높을수록 ↑")
+  check(gainHighPol == math.floor(200 * d.perGold * (1 + 100 * d.polBonus)), "developGain 정치 배수 공식")
+
+  -- 새 런타임 지역상태(투자 대상) — 금·군량 + devDone/searchDone 포함.
+  local function freshRegion()
+    return { id = "r1", name = "테스트", flood = 40, loyal = 50, commerce = 60, land = 70,
+             gold = 1000, grain = 2000,
+             devDone = { flood = false, loyal = false, commerce = false, land = false },
+             searchDone = false }
+  end
+
+  -- 비용 자원(GDD 10장): 민충성=군량, 나머지=금.
+  check(Develop.investCostField("loyal") == "grain", "investCostField 민충성=군량")
+  check(Develop.investCostField("flood") == "gold", "investCostField 치수=금")
+  check(Develop.investCostField("commerce") == "gold" and Develop.investCostField("land") == "gold",
+    "investCostField 상업·토지=금")
+
+  -- canInvest: 정상 / 0 / 알수없는 항목 / devDone / 자원부족.
+  local region = freshRegion()
+  check(Develop.canInvest(region, "flood", 100) == true, "canInvest 정상")
+  check(Develop.canInvest(region, "flood", 0) == false, "canInvest 0 불가")
+  check(Develop.canInvest(region, "xyz", 100) == false, "canInvest 잘못된 항목 불가")
+  check(Develop.canInvest(region, "flood", 2000) == false, "canInvest 금부족 불가")
+  region.devDone.flood = true
+  check(Develop.canInvest(region, "flood", 100) == false, "canInvest devDone 항목 불가")
+  check(Develop.canInvest(region, "loyal", 100) == true, "canInvest 다른 항목은 가능")
+
+  -- applyInvest(금 항목): 금 차감 + 수치 상승 + devDone + 수행 장수 행동 소진.
+  local r2 = freshRegion()
+  local perf = { pol = 80, state = S.active, actionDone = false, moving = false }
+  local gain = Develop.developGain(100, perf)
+  local applied = Develop.applyInvest(r2, "flood", 100, perf)
+  check(applied == gain, "applyInvest 반환 = 상승량")
+  check(r2.flood == 40 + gain, "applyInvest 수치 상승")
+  check(r2.gold == 900 and r2.grain == 2000, "applyInvest 금 항목은 금만 차감(군량 불변)")
+  check(r2.devDone.flood == true, "applyInvest devDone set")
+  check(perf.actionDone == true, "applyInvest 수행 장수 행동 소진")
+
+  -- 민충성 투자 = 군량 소모(GDD 10장): 군량 차감, 금 불변.
+  local r4 = freshRegion()
+  local perf2 = { pol = 60, state = S.active, actionDone = false, moving = false }
+  local g4 = Develop.developGain(300, perf2)
+  Develop.applyInvest(r4, "loyal", 300, perf2)
+  check(r4.loyal == 50 + g4, "민충성 투자 수치 상승")
+  check(r4.grain == 1700 and r4.gold == 1000, "민충성 투자는 군량만 차감(금 불변)")
+
+  -- 군량 부족이면 민충성 투자 불가(금은 충분해도).
+  local r5 = freshRegion()
+  r5.grain = 50
+  check(Develop.canInvest(r5, "loyal", 300) == false, "민충성: 군량 부족 → 불가")
+  check(Develop.canInvest(r5, "flood", 300) == true, "치수: 금 충분 → 가능(군량 무관)")
+
+  -- 상한 클램프: 98에서 큰 투자 → 100 으로 멈추고 실제 상승분만 반환.
+  local r3 = freshRegion()
+  r3.commerce = 98
+  local perfHi = { pol = 100, state = S.active, actionDone = false, moving = false }
+  local realGain = Develop.applyInvest(r3, "commerce", 500, perfHi)
+  check(r3.commerce == d.maxStat, "applyInvest 상한 클램프(100)")
+  check(realGain == d.maxStat - 98, "applyInvest 클램프 후 실제 상승분 반환")
+end
+
+-- ── 내정: 인재 탐색 (game_state, GDD 10장) ───────────────
+do
+  local S = GameState.STATE
+  local sc = config.search
+
+  -- searchSuccessChance: 정치 높을수록 ↑, maxRate 클램프.
+  check(Develop.searchSuccessChance({ pol = 100 }) > Develop.searchSuccessChance({ pol = 0 }),
+    "searchSuccessChance 정치 ↑")
+  check(Develop.searchSuccessChance({ pol = 0 }) == math.max(0, math.min(sc.maxRate, sc.base)),
+    "searchSuccessChance 정치0 = base")
+  check(Develop.searchSuccessChance({ pol = 100000 }) == sc.maxRate, "searchSuccessChance maxRate 클램프")
+
+  -- undiscoveredFree: 같은 지역 free + 미발견만.
+  local officers = {
+    { id = "a", region = "r1", state = S.free, discovered = false },
+    { id = "b", region = "r1", state = S.free, discovered = true },  -- 이미 발견
+    { id = "c", region = "r2", state = S.free, discovered = false }, -- 다른 지역
+    { id = "d", region = "r1", state = S.active, discovered = false },-- active
+  }
+  local pool = Develop.undiscoveredFree(officers, "r1")
+  check(#pool == 1 and pool[1].id == "a", "undiscoveredFree 미발견 free 만")
+
+  -- canSearch: 정상 / 장수없음 / 행동불가 / searchDone.
+  local region = { searchDone = false }
+  local perf = { state = S.active, actionDone = false, moving = false, pol = 50 }
+  check(Develop.canSearch(region, perf) == true, "canSearch 정상")
+  check(Develop.canSearch(region, nil) == false, "canSearch 수행 장수 없음 불가")
+  check(Develop.canSearch(region, { state = S.active, actionDone = true }) == false, "canSearch 행동소진 불가")
+  region.searchDone = true
+  check(Develop.canSearch(region, perf) == false, "canSearch searchDone 불가")
+
+  -- attemptSearch 성공(rng=0 → roll<chance): 첫 미발견 free discovered + searchDone + markActed + 반환.
+  local off2 = {
+    { id = "x", region = "r1", state = S.free, discovered = false },
+    { id = "y", region = "r1", state = S.free, discovered = false },
+  }
+  local reg2 = { searchDone = false }
+  local p2 = { state = S.active, actionDone = false, moving = false, pol = 100 }
+  local found = Develop.attemptSearch(off2, "r1", reg2, p2, function() return 0 end)
+  check(found ~= nil and found.discovered == true, "attemptSearch 성공 시 발견 + discovered")
+  check(reg2.searchDone == true and p2.actionDone == true, "attemptSearch searchDone + 행동 소진")
+
+  -- attemptSearch 실패(rng≈1 → roll>=chance): nil, 그래도 searchDone + markActed.
+  local off3 = { { id = "z", region = "r1", state = S.free, discovered = false } }
+  local reg3 = { searchDone = false }
+  local p3 = { state = S.active, actionDone = false, moving = false, pol = 0 }
+  local f3 = Develop.attemptSearch(off3, "r1", reg3, p3, function() return 0.999 end)
+  check(f3 == nil, "attemptSearch 실패 → nil")
+  check(reg3.searchDone == true and p3.actionDone == true and off3[1].discovered == false,
+    "attemptSearch 실패해도 searchDone+소진, 발견 안 됨")
+
+  -- 발견할 free 가 없으면 성공 굴림이어도 nil(빈손).
+  local off4 = { { id = "w", region = "r1", state = S.active } }
+  local reg4 = { searchDone = false }
+  local p4 = { state = S.active, actionDone = false, moving = false, pol = 100 }
+  check(Develop.attemptSearch(off4, "r1", reg4, p4, function() return 0 end) == nil,
+    "attemptSearch 발견 대상 없으면 nil")
+end
+
+-- ── 내정: 등용 (game_state, GDD 14장 톤) ─────────────────
+do
+  local S = GameState.STATE
+  local rc = config.recruit
+
+  check(Develop.recruitChance({ pol = 100 }) > Develop.recruitChance({ pol = 0 }), "recruitChance 정치 ↑")
+  check(Develop.recruitChance({ pol = 100000 }) == rc.maxRate, "recruitChance maxRate 클램프")
+
+  -- canRecruit: 발견 free + 행동 가능 수행 장수.
+  local perf = { state = S.active, actionDone = false, moving = false, pol = 80 }
+  check(Develop.canRecruit({ state = S.free, discovered = true }, perf) == true, "canRecruit 정상")
+  check(Develop.canRecruit({ state = S.free, discovered = false }, perf) == false, "canRecruit 미발견 불가")
+  check(Develop.canRecruit({ state = S.active, discovered = true }, perf) == false, "canRecruit 재야 아님 불가")
+  check(Develop.canRecruit({ state = S.free, discovered = true }, nil) == false, "canRecruit 수행 장수 없음 불가")
+
+  -- attemptRecruit 성공(rng=0): active 편입 + faction + 초기 충성 + 발견 해제 + 행동 소진.
+  local target = { id = "t", state = S.free, discovered = true, region = "r1", faction = nil }
+  local p1 = { state = S.active, actionDone = false, moving = false, pol = 100 }
+  local ok = Develop.attemptRecruit(target, p1, "wei", function() return 0 end)
+  check(ok == true, "attemptRecruit 성공 true")
+  check(target.state == S.active and target.faction == "wei", "attemptRecruit active+세력 편입")
+  check(target.loyalty == rc.initLoyalty, "attemptRecruit 초기 충성도")
+  check(target.discovered == nil and p1.actionDone == true, "attemptRecruit 발견 해제 + 행동 소진")
+
+  -- attemptRecruit 실패(rng≈1): false, 대상 유지, 그래도 행동 소진(재시도 스팸 방지).
+  local target2 = { id = "u", state = S.free, discovered = true, region = "r1" }
+  local p2 = { state = S.active, actionDone = false, moving = false, pol = 0 }
+  local ok2 = Develop.attemptRecruit(target2, p2, "wei", function() return 0.999 end)
+  check(ok2 == false, "attemptRecruit 실패 false")
+  check(target2.state == S.free and target2.discovered == true, "attemptRecruit 실패 시 대상 유지")
+  check(p2.actionDone == true, "attemptRecruit 실패해도 행동 소진")
+end
+
+-- ── 내정: 턴 1회 플래그 리셋 (game_state, GDD 10장) ──────
+do
+  -- resetRegionActions: devDone/searchDone 전부 false 로.
+  local rs = {
+    r1 = { devDone = { flood = true, loyal = true, commerce = true, land = true }, searchDone = true },
+    r2 = { devDone = { flood = false, loyal = true, commerce = false, land = false }, searchDone = false },
+  }
+  GameState.resetRegionActions(rs)
+  check(rs.r1.devDone.flood == false and rs.r1.devDone.loyal == false
+    and rs.r1.devDone.commerce == false and rs.r1.devDone.land == false and rs.r1.searchDone == false,
+    "resetRegionActions r1 전부 false")
+  check(rs.r2.devDone.loyal == false, "resetRegionActions r2 도 리셋")
+
+  -- advanceTurn 에 regionState 넘기면 턴 진행 시 함께 리셋(GDD 10장 빨간 비활성 복구).
+  local rs2 = { r1 = { devDone = { flood = true, loyal = false, commerce = false, land = false }, searchDone = true } }
+  GameState.advanceTurn({ year = 1, month = 1, count = 1 }, { regionState = rs2 })
+  check(rs2.r1.devDone.flood == false and rs2.r1.searchDone == false, "advanceTurn regionState 리셋")
+end
+
+-- ── 내정: build* 초기화 + 실제 시나리오 흐름 (GDD 5·10장) ──
+do
+  local sc = game_data.scenarios[3] -- three_kingdoms
+
+  -- buildRegions: devDone(4항목 false) + searchDone false 초기화.
+  local rs = GameState.buildRegions(game_data, sc)
+  local ly = rs.luoyang
+  check(ly.devDone and ly.devDone.flood == false and ly.devDone.loyal == false
+    and ly.devDone.commerce == false and ly.devDone.land == false, "buildRegions devDone 초기화")
+  check(ly.searchDone == false, "buildRegions searchDone 초기화")
+
+  -- buildOfficers: discovered=false 초기화(전원).
+  local officers = GameState.buildOfficers(game_data, sc)
+  local allUndiscovered = true
+  for _, o in ipairs(officers) do if o.discovered ~= false then allUndiscovered = false end end
+  check(allUndiscovered, "buildOfficers discovered=false 초기화")
+
+  -- 통합 흐름: 소유 지역(낙양) 태수로 투자 → 금 차감 + 수치 상승 + 빨간 비활성(devDone) → 리셋 복구.
+  local governors = GameState.assignGovernors(game_data.regions, officers, function() return 1 end)
+  local govId = governors.luoyang
+  local gov = GameState.byId(officers, govId)
+  local goldBefore, floodBefore = ly.gold, ly.flood
+  check(Develop.canInvest(ly, "flood", 100) == true, "통합: 낙양 투자 가능")
+  Develop.applyInvest(ly, "flood", 100, gov)
+  check(ly.gold == goldBefore - 100 and ly.flood > floodBefore, "통합: 투자 후 금 차감 + 치수 상승")
+  check(ly.devDone.flood == true and Develop.canInvest(ly, "flood", 100) == false, "통합: 재투자 불가(빨간 비활성)")
+  GameState.resetRegionActions(rs)
+  check(ly.devDone.flood == false, "통합: 턴 리셋 후 재투자 가능")
+end
+
+-- ── [버그회귀] 충성도 표기: 일반 장수는 수치, 수장만 '-' (GDD 7장) ──
+do
+  -- 3개 시나리오 전부: active 비수장은 numeric loyalty, 수장은 loyaltyText "-".
+  --   (buildOfficers 의 isLord/loyalty 분기 함정 교정 + 데이터 누락 동시 방어)
+  for si, sc in ipairs(game_data.scenarios) do
+    local officers = GameState.buildOfficers(game_data, sc)
+    local badNormal, badLord = 0, 0
+    for _, o in ipairs(officers) do
+      if o.state == GameState.STATE.active then
+        if o.isLord then
+          -- 수장: 충성도 표기는 반드시 "-".
+          if GameState.loyaltyText(o) ~= "-" then badLord = badLord + 1; print("  [lord loyalty] " .. sc.id .. "/" .. o.id) end
+        else
+          -- 일반 active: 충성도는 숫자(loyaltyText 가 number 반환).
+          if type(GameState.loyaltyText(o)) ~= "number" then
+            badNormal = badNormal + 1; print("  [normal loyalty] " .. sc.id .. "/" .. o.id)
+          end
+        end
+      end
+    end
+    check(badNormal == 0, "시나리오 " .. si .. " 일반 active 충성도 수치")
+    check(badLord == 0, "시나리오 " .. si .. " 수장 충성도 '-'")
+  end
+
+  -- buildOfficers 분기: 수장은 loyalty=nil, 일반은 배치 loyalty 그대로(연산자 함정 회귀).
+  local fakeData = { officers = {
+    { id = "lordx", name = "군주X", might = 50, intel = 50, pol = 50, hp = 50, appear = 100 },
+    { id = "genx",  name = "장수X", might = 50, intel = 50, pol = 50, hp = 50, appear = 100 },
+  } }
+  local fakeSc = {
+    factions = { fx = { name = "에프", color = { 1, 1, 1 }, lord = "lordx" } },
+    officers = {
+      { id = "lordx", faction = "fx", region = "r", state = "active", loyalty = 77 }, -- 수장에 loyalty 가 있어도
+      { id = "genx",  faction = "fx", region = "r", state = "active", loyalty = 64 },
+    },
+  }
+  local built = GameState.buildOfficers(fakeData, fakeSc)
+  local lordx = GameState.byId(built, "lordx")
+  local genx = GameState.byId(built, "genx")
+  check(lordx.isLord == true and lordx.loyalty == nil, "buildOfficers 수장 loyalty=nil(데이터에 있어도)")
+  check(genx.isLord == false and genx.loyalty == 64, "buildOfficers 일반 loyalty=배치값")
 end
 
 -- ── 결과 ─────────────────────────────────────────────────
