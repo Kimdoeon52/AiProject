@@ -117,6 +117,7 @@ function GameState.buildOfficers(gameData, scenario)
         loyalty = loyalty,
         -- 런타임 진행 값(초기치). 게임 중 변한다.
         troops = 0,          -- 현재 보유 병력
+        training = 0,        -- 병력 훈련도 0~100 (GDD 11장). 징병 시 신규병은 0, 훈련으로 상승.
         equip = nil,         -- 장착 장비(GDD 8장). 미구현 → 항상 nil(스텁)
         moving = false,      -- 이동/수송 중 여부
         actionDone = false,  -- 이번 턴 주요 행동을 이미 했는지(행동 제한)
@@ -276,6 +277,83 @@ function GameState.applyGiftGold(gold, officer, amount)
   officer.loyalty = math.min(config.officer.maxLoyalty, cur + gain)
   officer.giftedGoldThisTurn = true
   return gold - amount
+end
+
+-- ── 징병/훈련 시스템 (GDD 11장) ──────────────────────────
+--   병력·훈련도는 "수행 장수 단위" 다 — region 엔 troops 필드가 없고(지역 정보는
+--   지역 내 장수 troops 합산으로 표시), 한도(무력*5)도 장수별이라 둘 다 officer 에 둔다.
+--   GDD 의 "지역 병력/훈련도"는 이 모델에서 수행 장수의 troops/training 으로 매핑된다.
+--   행동 제한: 둘 다 officer.actionDone(턴 1회) 사용 → markActed 로 소진.
+
+--- 이 장수가 지금 징병할 수 있는지 검사한다(버튼 활성/실행 전 판정). 순수 함수.
+-- @param region table   대상 지역(런타임 regionState — gold 사용)
+-- @param officer table  수행 장수(might/troops/actionDone)
+-- @return boolean ok, string|nil reason  불가 시 사유
+function GameState.canRecruit(region, officer)
+  if not GameState.canAct(officer) then return false, "행동 불가 장수" end
+  if region.gold < config.conscript.goldCost then return false, "금 부족" end
+  -- 이미 병력 한도(무력*5)가 가득이면 더 징병 불가 (GDD 11장: 한도 초과 불가).
+  if officer.troops >= GameState.troopsCap(officer) then return false, "병력 한도 가득" end
+  return true, nil
+end
+
+--- 징병을 적용한다 (GDD 11장). 상태 변경 함수.
+-- 규칙: 금 차감 → 인구·민충성 하락 → 한도까지 병력 충원 → 훈련도 가중평균 재계산 → 행동 소진.
+-- @param region table   대상 지역(gold/pop/loyal 변경됨)
+-- @param officer table  수행 장수(troops/training/actionDone 변경됨, canRecruit 통과 가정)
+-- @return number  실제 충원된 병력 수(한도 클램프로 troopsPerAction 보다 적을 수 있음)
+function GameState.applyRecruit(region, officer)
+  -- 1) 병력 한도 클램프: 남은 여유(room)와 1회 배치량 중 작은 값만 징병.
+  --    math.min(a,b) = 둘 중 작은 값 (C# Math.Min / C++ std::min).
+  --    예) 한도 100, 보유 50, 배치 100 → room 50 → add 50 (150 으로 넘지 않음).
+  local cap  = GameState.troopsCap(officer)
+  local room = cap - officer.troops
+  local add  = math.min(config.conscript.troopsPerAction, room)
+
+  -- 2) 비용·자원: 지역 금 차감, 인구·민충성 하락.
+  region.gold = region.gold - config.conscript.goldCost
+  -- math.floor(x) = 내림(C# Math.Floor / C++ std::floor). 인구는 정수 추상값이라 내림.
+  -- 인구는 징병으로 빠져나간 장정만큼 감소(병력 비례).
+  region.pop  = math.max(0, region.pop - math.floor(add * config.conscript.popDrainPerTroop))
+  -- 민충성은 징병 1회당 고정 하락(강제 동원의 민심 비용).
+  region.loyal = math.max(0, region.loyal - config.conscript.loyaltyDropPerAction)
+
+  -- 3) 훈련도 가중평균 재계산 (GDD 11장): 신규 병력 훈련도는 0.
+  --    새 훈련도 = (기존병력*기존훈련도 + 신규병력*0) / (기존+신규).
+  --    왜 가중평균: 미숙한 신병이 섞이면 부대 평균 숙련이 내려가기 때문.
+  --    old+add 가 0 이면 0 나누기(0/0 = nan) 방지 가드.
+  local old = officer.troops
+  if old + add > 0 then
+    officer.training = (old * officer.training + add * 0) / (old + add)
+  end
+  officer.troops = old + add
+
+  -- 4) 이번 턴 행동 소진.
+  GameState.markActed(officer)
+  return add
+end
+
+--- 이 장수가 지금 훈련할 수 있는지 검사한다. 순수 함수.
+-- @param officer table  수행 장수(troops/training/actionDone)
+-- @return boolean ok, string|nil reason
+function GameState.canTrain(officer)
+  if not GameState.canAct(officer) then return false, "행동 불가 장수" end
+  if officer.troops <= 0 then return false, "훈련할 병력 없음" end
+  if officer.training >= config.training.max then return false, "이미 최대 훈련도" end
+  return true, nil
+end
+
+--- 훈련을 적용한다 (GDD 11장). 상태 변경 함수.
+-- 훈련도 상승 = 무력 * gainPerMight, 단 0~100 으로 클램프.
+--   왜 무력 비례: 무력 높은 장수가 더 빠르게 정예화(GDD 11장: 무력100 → ~10회로 100).
+-- @param officer table  수행 장수(training/actionDone 변경됨, canTrain 통과 가정)
+-- @return number  이번 훈련으로 오른 훈련도(상한에 막히면 실제 증가분보다 적게 체감)
+function GameState.applyTrain(officer)
+  local gain = officer.might * config.training.gainPerMight
+  -- 상한 클램프: 100 을 넘지 않게. math.min 으로 [.., max] 제한.
+  officer.training = math.min(config.training.max, officer.training + gain)
+  GameState.markActed(officer)
+  return gain
 end
 
 -- ── 장비 시스템 (GDD 8장) ────────────────────────────────

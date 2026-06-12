@@ -53,6 +53,7 @@ local state = {
   regionInfoOpen = false, -- 지역 정보 팝업 열림 여부(GDD 17장)
   detailId = nil,     -- 상세 보는 장수 id (nil=목록만)
   sub = nil,          -- 서브 팝업: nil | "gold" | "equip"
+  action = nil,       -- 수행 장수 선택 팝업 종류: nil | "recruit" | "train" (GDD 11장)
   giftAmount = 1,     -- 금 선물 선택 금액(1~goldGiftMax)
   notice = nil,       -- 일시 안내 문구(예: "금 부족") — 표시용
   -- 내정 팝업(GDD 10장). dev_popup.lua 가 읽고/변경한다. draw 는 읽기만.
@@ -329,12 +330,42 @@ local function devButton()
   return UI.newButton(ib.x, ib.y - ib.h - gap, ib.w, ib.h, "내정", "dev")
 end
 
+--- "훈련" 버튼을 만든다(내정 버튼 바로 위). 수행 장수 선택 팝업 열기용 (GDD 11장).
+-- @return table  UI 버튼
+local function trainButton()
+  local db = devButton()
+  local gap = 12
+  return UI.newButton(db.x, db.y - db.h - gap, db.w, db.h, "훈련", "train")
+end
+
+--- "징병" 버튼을 만든다(훈련 버튼 바로 위) (GDD 11장).
+-- @return table  UI 버튼
+local function recruitButton()
+  local trb = trainButton()
+  local gap = 12
+  return UI.newButton(trb.x, trb.y - trb.h - gap, trb.w, trb.h, "징병", "recruit")
+end
+
 --- 선택 지역이 플레이어 소유인지(내정 버튼 활성 게이팅, GDD 10장 "소유 지역에서").
 -- @return boolean
 local function selectedOwnedByPlayer()
   return state.selectedId ~= nil
     and state.ownership ~= nil
     and state.ownership[state.selectedId] == state.playerFactionId
+end
+
+--- 선택 지역에서 징병/훈련 명령을 줄 수 있는지(버튼 활성 조건). 읽기 전용.
+-- 조건: 플레이어 소유 + 그 지역에 이번 턴 행동 가능 장수 1명 이상.
+--   "지역당 턴 1회"는 행동 가능 장수가 없으면(모두 actionDone) 비활성으로 충족된다(GDD 11장).
+-- @return boolean
+local function canCommandSelected()
+  if not selectedOwnedByPlayer() then return false end
+  -- 지역 내 행동 가능 장수 탐색.
+  local here = GameState.officersInRegion(state.officers, state.selectedId)
+  for _, o in ipairs(here) do
+    if GameState.canAct(o) then return true end
+  end
+  return false
 end
 
 --- 턴 진행에 넘길 컨텍스트(장수 목록 + 미구현 시스템 훅)를 만든다.
@@ -442,6 +473,18 @@ local function drawPanel()
     UI.draw(chk, { hovered = UI.hit(chk, mx, my), accent = config.colors.selectBorder })
   else
     UI.draw(chk, DISABLED)
+  end
+
+  -- 징병·훈련 버튼: 플레이어 소유 + 행동 가능 장수 있을 때만 활성 (GDD 11장).
+  local canCmd = canCommandSelected()
+  local rec = recruitButton()
+  local trn = trainButton()
+  if canCmd then
+    UI.draw(rec, { hovered = UI.hit(rec, mx, my), accent = config.colors.selectBorder })
+    UI.draw(trn, { hovered = UI.hit(trn, mx, my), accent = config.colors.selectBorder })
+  else
+    UI.draw(rec, DISABLED) -- 비소유/미선택/행동 가능 장수 없음 → 비활성
+    UI.draw(trn, DISABLED)
   end
 
   local btn = turnButton()
@@ -595,6 +638,18 @@ function love.mousepressed(x, y, button)
     return
   end
 
+  -- "징병"·"훈련" 버튼(명령 가능 지역에서만) → 수행 장수 선택 팝업 열기 (GDD 11장).
+  if canCommandSelected() then
+    if UI.hit(recruitButton(), x, y) then
+      state.action = "recruit"; state.listOpen = false; state.detailId = nil; state.notice = nil
+      return
+    end
+    if UI.hit(trainButton(), x, y) then
+      state.action = "train"; state.listOpen = false; state.detailId = nil; state.notice = nil
+      return
+    end
+  end
+
   -- 누름 기록(클릭/드래그는 이동량으로 판정).
   state.press = { x = x, y = y, moved = 0, dragging = false }
 end
@@ -645,6 +700,8 @@ function love.keypressed(key)
       resetToMain()
     elseif state.sub then
       state.sub = nil; state.notice = nil
+    elseif state.action then
+      state.action = nil; state.notice = nil -- 수행 장수 선택 팝업 닫기 (GDD 11장)
     elseif state.detailId then
       state.detailId = nil
     elseif state.listOpen then

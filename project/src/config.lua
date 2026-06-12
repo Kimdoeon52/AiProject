@@ -131,6 +131,25 @@ config.recruit = {
   initLoyalty = 70,    -- 등용 직후 충성도(GDD 7장 충성 범위 안)
 }
 
+-- 징병 상수 (GDD 11장). 규칙 계층(game_state)이 읽어 쓴다. 매직넘버 금지(CLAUDE.md).
+--   ※ config.recruit(등용=장수 영입, GDD 14장)과 구분 — 이쪽은 병사 징집(conscription).
+--   GDD 11장은 "금70 소모 / 인구·민충성 하락 / 한도 초과 불가"만 정하고,
+--   구체 계수(병력량·감소율)는 코드에 둔다(밸런싱 대상 — config.economy 와 같은 선례).
+config.conscript = {
+  goldCost = 70,             -- 1회 징병 비용 금 (GDD 11장 명시값)
+  troopsPerAction = 100,     -- 1회 징병 병력(고정 배치). 무력*5 한도까지만 클램프 (밸런싱)
+  popDrainPerTroop = 0.02,   -- 병력 1당 인구 감소(추상 만단위). 100명 징병 → 인구 -2 (밸런싱)
+  loyaltyDropPerAction = 3,  -- 1회 징병당 민충성 하락 (밸런싱)
+}
+
+-- 훈련 상수 (GDD 11장). 규칙 계층(game_state)이 읽어 쓴다.
+config.training = {
+  min = 0,             -- 훈련도 하한 (GDD 11장: "0~100")
+  max = 100,           -- 훈련도 상한 (GDD 11장: 전투력에 반영)
+  -- 무력 1당 훈련도 상승량. 무력100 → +10/회 → 10회로 100 도달 (GDD 11장: "무력 100급 ≈ 10회로 100").
+  gainPerMight = 0.1,
+}
+
 -- 팝업(장수 목록/상세/선물) 레이아웃 상수 (GDD 17장 팝업). main 이 읽어 배치.
 config.popup = {
   width = 600,         -- 팝업 기본 폭(px)

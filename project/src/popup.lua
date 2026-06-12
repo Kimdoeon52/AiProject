@@ -14,7 +14,7 @@ popup.lua — 장수 팝업(목록/상세) + 선물 서브팝업 (표현·입력
     - 800줄 규칙(CLAUDE.md)에 따라 main 에서 팝업 책임을 떼어낸 모듈.
 
   state 의존 필드(주입):
-    listOpen, regionInfoOpen, detailId, sub("gold"|"equip"), giftAmount, notice,
+    listOpen, regionInfoOpen, detailId, sub("gold"|"equip"), action("recruit"|"train"), giftAmount, notice,
     selectedId, officers, regions, scenario, playerFactionId,
     regionState(지역 금·군량·내부수치), governors(태수), factionInventory(장비고)
 --]]
@@ -188,6 +188,77 @@ local STAT_VIEW = {
 }
 
 local DISABLED = { text = { 0.5, 0.52, 0.58 }, border = { 0.3, 0.31, 0.36 } }
+
+-- ── 징병/훈련 수행 장수 선택 팝업 (GDD 11장) ──────────────
+--   state.action ("recruit"|"train") 일 때 뜨는 모달. 지역 내 장수를 골라 명령 수행.
+--   규칙(자원/병력/훈련도 변경)은 game_state 가 담당, 여기선 호출·표시만.
+
+--- 수행 장수가 현재 action 을 할 수 있는지(버튼 활성 판정). 순수.
+-- canRecruit/canTrain 은 (ok, reason) 2값 반환 → 괄호로 감싸 첫 값(ok)만 취한다.
+--   (Lua 다중반환: f() 를 (f()) 로 감싸면 첫 값만 남음 — C# 엔 없는 문법.)
+-- @return boolean
+local function canDoAction(state, o)
+  if state.action == "recruit" then
+    local region = state.regionState and state.regionState[state.selectedId]
+    if not region then return false end
+    return (GameState.canRecruit(region, o))
+  elseif state.action == "train" then
+    return (GameState.canTrain(o))
+  end
+  return false
+end
+
+--- 수행 장수 선택 목록의 각 줄. draw·클릭 공유 레이아웃.
+-- @return table  { {btn, officer, enabled}, ... }
+local function actionRows(state, px, py, pw)
+  local rows = {}
+  if not (state.selectedId and state.officers) then return rows end
+  local here = GameState.officersInRegion(state.officers, state.selectedId)
+  local pad, rh, rg = config.popup.pad, config.popup.rowHeight, config.popup.rowGap
+  local x = px + pad
+  local y0 = py + pad + 46
+  local w = pw - pad * 2
+  for i, o in ipairs(here) do
+    local cap = GameState.troopsCap(o)
+    -- 병력 현황·훈련도를 라벨에 표시(징병 한도/훈련 진행 확인용). 훈련도는 내림 정수로.
+    local label = string.format("%s   병력 %d/%d   훈련 %d", o.name, o.troops, cap, math.floor(o.training))
+    rows[i] = {
+      btn = UI.newButton(x, y0 + (i - 1) * (rh + rg), w, rh, label, o.id),
+      officer = o,
+      enabled = canDoAction(state, o),
+    }
+  end
+  return rows
+end
+
+--- 수행 장수 선택 팝업 본문.
+local function drawActionList(state, px, py, pw, ph)
+  local pad = config.popup.pad
+  local sel = state.selectedId and Region.byId(state.regions, state.selectedId)
+  local title = (state.action == "recruit") and "징병" or "훈련"
+  love.graphics.setColor(config.colors.text)
+  love.graphics.print((sel and sel.name or "") .. " — " .. title .. " 수행 장수 선택", px + pad, py + pad)
+
+  local mx, my = love.mouse.getPosition()
+  local rows = actionRows(state, px, py, pw)
+  if #rows == 0 then
+    love.graphics.setColor(0.7, 0.72, 0.78)
+    love.graphics.print("이 지역에 장수가 없습니다.", px + pad, py + pad + 50)
+  else
+    for _, r in ipairs(rows) do
+      if r.enabled then
+        UI.draw(r.btn, { hovered = UI.hit(r.btn, mx, my), accent = config.colors.selectBorder })
+      else
+        UI.draw(r.btn, DISABLED) -- 행동완료/금부족/한도가득/병력없음 → 비활성
+      end
+    end
+  end
+  -- 직전 행동 결과 / 불가 사유 안내.
+  if state.notice then
+    love.graphics.setColor(config.colors.panelValue)
+    love.graphics.print(state.notice, px + pad, py + ph - 40)
+  end
+end
 
 --- 장수 상세 팝업 본문(GDD 7·8장 표시 항목).
 local function drawOfficerDetail(state, px, py, pw, ph)
@@ -407,13 +478,15 @@ function Popup.draw(state)
     return
   end
 
-  if not (state.listOpen or state.detailId or state.sub) then return end
+  if not (state.listOpen or state.detailId or state.sub or state.action) then return end
   drawScrim()
   local px, py, pw, ph = popupRect()
   love.graphics.setColor(config.popup.bg)
   love.graphics.rectangle("fill", px, py, pw, ph, 10, 10)
 
-  if state.sub == "gold" then
+  if state.action then
+    drawActionList(state, px, py, pw, ph) -- 징병/훈련 수행 장수 선택 (GDD 11장)
+  elseif state.sub == "gold" then
     drawGiftGold(state, px, py, pw, ph)
   elseif state.sub == "equip" then
     drawGiftEquip(state, px, py, pw)
@@ -443,10 +516,47 @@ function Popup.consumeClick(state, x, y)
     return true
   end
 
-  if not (state.listOpen or state.detailId or state.sub) then return false end
+  if not (state.listOpen or state.detailId or state.sub or state.action) then return false end
 
   local px, py, pw, ph = popupRect()
   local cb = closeButton(px, py, pw)
+
+  -- 징병/훈련 수행 장수 선택 (GDD 11장): X=닫기 / 장수 클릭 = 명령 수행.
+  --   수행 후에도 팝업은 유지 → 결과(notice) 표시, 행동한 장수는 비활성으로 바뀜.
+  if state.action then
+    if UI.hit(cb, x, y) then
+      state.action = nil; state.notice = nil
+      return true
+    end
+    local region = state.regionState and state.regionState[state.selectedId]
+    for _, r in ipairs(actionRows(state, px, py, pw)) do
+      if UI.hit(r.btn, x, y) then
+        if not r.enabled then
+          state.notice = "수행 불가 장수"
+        elseif state.action == "recruit" then
+          -- 규칙은 game_state 가 수행(금/인구/민충성/병력/훈련도 변경). 결과만 표시.
+          local ok, reason = GameState.canRecruit(region, r.officer)
+          if ok then
+            local add = GameState.applyRecruit(region, r.officer)
+            state.notice = string.format("%s 징병 +%d (한도 %d)", r.officer.name, add, GameState.troopsCap(r.officer))
+          else
+            state.notice = reason
+          end
+        elseif state.action == "train" then
+          local ok, reason = GameState.canTrain(r.officer)
+          if ok then
+            local gain = GameState.applyTrain(r.officer)
+            -- %.0f = 소수점 0자리(반올림 표시). 훈련도는 내림 정수로 별도 표시.
+            state.notice = string.format("%s 훈련 +%.0f (훈련도 %d)", r.officer.name, gain, math.floor(r.officer.training))
+          else
+            state.notice = reason
+          end
+        end
+        break
+      end
+    end
+    return true
+  end
 
   if state.sub == "gold" then
     -- 금 선물 서브팝업: X=서브 닫기 / − + 조절 / 확정 = 선물 실행.

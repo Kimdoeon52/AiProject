@@ -254,6 +254,67 @@ do
   check(GameState.canAct(roster[2]) == false, "markActed 후 행동 불가")
 end
 
+-- ── 징병/훈련 규칙 (game_state, GDD 11장) ────────────────
+do
+  local S = GameState.STATE
+  -- 행동 가능한 더미 장수를 만든다(상태 active, 미행동).
+  local function newOfficer(might, troops, training)
+    return { state = S.active, actionDone = false, moving = false,
+             might = might, troops = troops or 0, training = training or 0, name = "테스트" }
+  end
+
+  -- 1) 병력 한도 클램프: 무력20(한도100), 보유50 → 1회 징병이 한도(100)를 넘지 않는다.
+  do
+    local o = newOfficer(20, 50, 0)
+    local region = { gold = 1000, pop = 50, loyal = 50 }
+    local cap = GameState.troopsCap(o) -- 100
+    local expectAdd = math.min(config.conscript.troopsPerAction, cap - 50)
+    local add = GameState.applyRecruit(region, o)
+    check(add == expectAdd, "징병 한도 클램프: 충원량 = min(배치, 여유)")
+    check(o.troops == 50 + expectAdd and o.troops <= cap, "징병 후 병력 ≤ 무력*5 한도")
+  end
+
+  -- 2) 가중평균 훈련도: 기존 100병 훈련80 + 신규 100병(훈련0) → (100*80+100*0)/200 = 40.
+  do
+    local o = newOfficer(100, 100, 80) -- 한도 500, 여유 충분
+    local region = { gold = 1000, pop = 80, loyal = 70 }
+    local add = GameState.applyRecruit(region, o)
+    check(add == config.conscript.troopsPerAction, "징병 충원량 = 배치량(여유 충분)")
+    check(approx(o.training, (100 * 80 + add * 0) / (100 + add)), "징병 훈련도 가중평균 재계산")
+  end
+
+  -- 3) 훈련 상승 스케일: 무력100 → 1회 +10(무력*gainPerMight), 10회로 100 도달·상한 클램프.
+  do
+    local o = newOfficer(100, 50, 0)
+    local gain = GameState.applyTrain(o)
+    check(approx(gain, 100 * config.training.gainPerMight), "훈련 상승 = 무력 * 계수")
+    check(approx(o.training, 100 * config.training.gainPerMight), "1회 훈련 후 훈련도")
+    -- 상한 클램프: 훈련도 95에서 +10 시도 → 100 에서 멈춘다.
+    local o2 = newOfficer(100, 50, 95)
+    GameState.applyTrain(o2)
+    check(o2.training == config.training.max, "훈련도 상한(100) 클램프")
+  end
+
+  -- 4) 자원 변화: 금70 차감 → 0, 인구·민충성 하락, 신규병 훈련도 0.
+  do
+    local o = newOfficer(50, 0, 0) -- 한도 250, 보유 0
+    local region = { gold = config.conscript.goldCost, pop = 82, loyal = 60 }
+    local add = GameState.applyRecruit(region, o)
+    check(region.gold == 0, "징병 비용 차감(금 70 → 0)")
+    check(region.pop == 82 - math.floor(add * config.conscript.popDrainPerTroop), "징병 인구 감소")
+    check(region.loyal == 60 - config.conscript.loyaltyDropPerAction, "징병 민충성 하락")
+    check(o.training == 0, "기존 병력 0 + 신규만 → 훈련도 0")
+  end
+
+  -- 5) 행동 게이팅: 한도 가득이면 징병 불가 / 병력 0이면 훈련 불가.
+  do
+    local full = newOfficer(40, 200, 0) -- 한도 200, 보유 200
+    check((GameState.canRecruit({ gold = 1000 }, full)) == false, "한도 가득 → 징병 불가")
+    local noTroop = newOfficer(40, 0, 0)
+    check((GameState.canTrain(noTroop)) == false, "병력 0 → 훈련 불가")
+  end
+end
+
 -- ── 시나리오별 장수 배치 정합성 (GDD 4·7장) ──────────────
 do
   local regions = game_data.regions
