@@ -20,6 +20,10 @@ local Region = require("region")
 local game_data = require("game_data")
 local GameState = require("game_state")
 local Develop = require("develop")
+local Movement = require("movement")
+local Battle = require("battle")
+local Captive = require("captive")
+local AI = require("ai")
 local config = require("config")
 
 local passed, failed = 0, 0
@@ -1072,6 +1076,390 @@ do
   local genx = GameState.byId(built, "genx")
   check(lordx.isLord == true and lordx.loyalty == nil, "buildOfficers 수장 loyalty=nil(데이터에 있어도)")
   check(genx.isLord == false and genx.loyalty == 64, "buildOfficers 일반 loyalty=배치값")
+end
+
+-- ── 가중평균 합류 공식 (game_state.mergeTraining, GDD 11·12장 공용) ──
+do
+  -- 징병/이동 합류가 공유하는 공식: (oldT*oldTr + addT*addTr)/(oldT+addT).
+  check(approx(GameState.mergeTraining(100, 80, 100, 0), 40), "mergeTraining (100*80+100*0)/200=40")
+  check(approx(GameState.mergeTraining(0, 0, 50, 60), 60), "mergeTraining 기존0 → 합류 훈련도")
+  check(GameState.mergeTraining(0, 0, 0, 0) == 0, "mergeTraining 0+0 → 0(나눗셈 가드)")
+end
+
+-- ── 이동/수송 명령 가능 판정 (movement.canMove/canTransport, GDD 12장) ──
+do
+  local M = Movement
+  -- a,b = 내 소유 / n = 중립 / e = 적. 인접: a-n 만 인접(거리 무제한이라 a-b 인접 무관).
+  local ownership = { a = "p", b = "p", e = "enemy" } -- n, far 는 키 없음 = 중립
+  local function isAdj(x, y)
+    return (x == "a" and y == "n") or (x == "n" and y == "a")
+  end
+
+  check((M.canMove(ownership, "a", "b", "p", isAdj)) == true, "canMove 내 소유끼리 거리 무제한")
+  check((M.canMove(ownership, "a", "n", "p", isAdj)) == true, "canMove 인접 중립 점령 가능")
+  check((M.canMove(ownership, "a", "far", "p", isAdj)) == false, "canMove 비인접 중립 불가")
+  check((M.canMove(ownership, "a", "a", "p", isAdj)) == false, "canMove 같은 지역 불가")
+  check((M.canMove(ownership, "a", "e", "p", isAdj)) == false, "canMove 적 지역 차단(전투 미구현)")
+  check((M.canMove(ownership, "n", "a", "p", isAdj)) == false, "canMove 출발지 내 소유 아님")
+
+  local rs = { a = { grain = 500 }, b = { grain = 100 } }
+  check((M.canTransport(ownership, "a", "b", "p", 300, rs)) == true, "canTransport 정상")
+  check((M.canTransport(ownership, "a", "n", "p", 300, rs)) == false, "canTransport 도착지 중립 불가")
+  check((M.canTransport(ownership, "a", "b", "p", 0, rs)) == false, "canTransport 군량0 불가")
+  check((M.canTransport(ownership, "a", "b", "p", 9999, rs)) == false, "canTransport 군량 부족 불가")
+end
+
+-- ── 이동 명령 생성 + 출발지 강등 + 도착 병력 합류 (movement, GDD 12·6장) ──
+do
+  local S = GameState.STATE
+  local M = Movement
+  -- 출발지 a(mover 단독), 도착지 b(수비대 garrison). 둘 다 내 소유.
+  local mover = { id = "m", faction = "p", region = "a", state = S.active,
+                  moving = false, actionDone = false, troops = 100, training = 80 }
+  local garrison = { id = "g", faction = "p", region = "b", state = S.active,
+                     moving = false, actionDone = false, troops = 100, training = 0 }
+  local officers = { mover, garrison }
+  local ownership = { a = "p", b = "p" }
+  local governors = { a = "m", b = "g" }
+  local orders = {}
+  local rs = { a = { grain = 0 }, b = { grain = 0 } }
+  local ctx = { regionState = rs, ownership = ownership, governors = governors, officers = officers }
+
+  M.issueOrder(orders, M.ORDER.move, mover, "a", "b", 5, ctx)
+  check(mover.moving == true and mover.actionDone == true and mover.region == nil,
+    "issueOrder 이동중 + 행동 소진 + 출발지 분리")
+  check(#orders == 1 and orders[1].arriveTurn == 5, "issueOrder 명령 목록 추가")
+  -- 출발지 a 는 mover 가 유일 active → 떠나면 active 0 → 중립 강등 + 태수 해제(정합성 훅).
+  check(ownership.a == nil and governors.a == nil, "issueOrder 출발지 active0 → 중립 강등 + 태수 해제")
+
+  M.processArrival(orders[1], officers, rs, ownership, governors)
+  check(mover.region == "b" and mover.moving == false, "도착 위치 갱신 + 이동중 해제")
+  check(garrison.troops == 200, "도착 병력 합류 합산(100+100)")
+  check(approx(garrison.training, (100 * 0 + 100 * 80) / 200), "도착 훈련도 가중평균(=40)")
+  check(mover.troops == 0, "합류 후 이동 장수 병력 0(단일 부대 통합)")
+end
+
+-- ── 중립 무혈 입성 (movement, GDD 12장) ──
+do
+  local S = GameState.STATE
+  local M = Movement
+  local mover = { id = "m", faction = "p", region = "a", state = S.active,
+                  moving = false, actionDone = false, troops = 120, training = 50 }
+  local officers = { mover }
+  local ownership = { a = "p" } -- b 는 중립(키 없음)
+  local governors = { a = "m" }
+  local orders = {}
+  local rs = { a = { grain = 0 }, b = { grain = 0 } }
+  local ctx = { regionState = rs, ownership = ownership, governors = governors, officers = officers }
+
+  M.issueOrder(orders, M.ORDER.move, mover, "a", "b", 2, ctx)
+  M.processArrival(orders[1], officers, rs, ownership, governors)
+  check(ownership.b == "p", "무혈 입성: 중립 → 내 소유로 소유권 이전")
+  check(mover.region == "b" and mover.troops == 120, "무혈 입성 후 장수 위치 + 병력 유지")
+end
+
+-- ── 수송 도착: 군량 이전 (movement, GDD 12장) ──
+do
+  local S = GameState.STATE
+  local M = Movement
+  -- 출발지 a 에 수송 장수 + 수비 장수(a 안 비게), 도착지 b.
+  local mover = { id = "m", faction = "p", region = "a", state = S.active,
+                  moving = false, actionDone = false, troops = 0, training = 0 }
+  local keep = { id = "k", faction = "p", region = "a", state = S.active, troops = 50, training = 0 }
+  local garrisonB = { id = "g", faction = "p", region = "b", state = S.active, troops = 0, training = 0 }
+  local officers = { mover, keep, garrisonB }
+  local ownership = { a = "p", b = "p" }
+  local governors = { a = "k", b = "g" }
+  local orders = {}
+  local rs = { a = { grain = 500 }, b = { grain = 100 } }
+  local ctx = { regionState = rs, ownership = ownership, governors = governors, officers = officers, grain = 300 }
+
+  M.issueOrder(orders, M.ORDER.transport, mover, "a", "b", 3, ctx)
+  check(rs.a.grain == 200, "수송 출발지 군량 즉시 차감(500-300)")
+  check(ownership.a == "p", "수송: 출발지 수비 장수 있어 강등 안 됨")
+  M.processArrival(orders[1], officers, rs, ownership, governors)
+  check(rs.b.grain == 400, "수송 도착지 군량 가산(100+300)")
+end
+
+-- ── 도착 타이밍/제거 (movement.processArrivals, GDD 3·12장) ──
+do
+  local S = GameState.STATE
+  local M = Movement
+  local mover = { id = "m", faction = "p", region = nil, state = S.active, troops = 10, training = 0, moving = true }
+  local g = { id = "g", faction = "p", region = "b", state = S.active, troops = 0, training = 0 }
+  local officers = { mover, g }
+  local ownership = { b = "p" }
+  local governors = { b = "g" }
+  local rs = { a = {}, b = {} }
+  local orders = { { kind = M.ORDER.move, officerId = "m", from = "a", to = "b", arriveTurn = 5, troops = 10, training = 0 } }
+
+  -- 도착 전 턴(arrivingCount=4 < 5) → 유지.
+  M.processArrivals(orders, 4, officers, rs, ownership, governors)
+  check(#orders == 1, "processArrivals 도착 전 명령 유지")
+  -- 도착 턴(5) → 처리 + 제거.
+  M.processArrivals(orders, 5, officers, rs, ownership, governors)
+  check(#orders == 0, "processArrivals 도착 후 명령 제거")
+  check(mover.region == "b" and g.troops == 10, "processArrivals 도착 처리 적용(병력 합류)")
+end
+
+-- ── 전투 시스템 (battle, GDD 13장, 시드 고정) ────────────
+do
+  local S = GameState.STATE
+  local b = config.battle
+  -- 전투용 더미 장수. equip=nil 이라 effectiveStat=기본 무력.
+  local function off(id, faction, region, might, troops, training)
+    return { id = id, name = id, faction = faction, region = region, state = S.active,
+             might = might, intel = 50, pol = 50, hp = 50,
+             troops = troops or 0, training = training or 0,
+             moving = false, actionDone = false, equip = nil }
+  end
+
+  -- 1) 전쟁 진입 판정.
+  do
+    local officers = { off("a", "p", "r1", 80, 100, 0) } -- r1 출진 장수
+    local ownership = { r1 = "p", r2 = "e", r3 = "p", r5 = "e" } -- r2 인접 적 / r3 내 / r5 비인접 적
+    local function adj(x, y) return (x == "r1" and y == "r2") or (x == "r2" and y == "r1") end
+    check((Battle.canDeclareWar(ownership, officers, "r1", "r2", "p", adj)) == true, "canDeclareWar 인접 적 지역")
+    check((Battle.canDeclareWar(ownership, officers, "r1", "r3", "p", adj)) == false, "canDeclareWar 내 지역 불가")
+    check((Battle.canDeclareWar(ownership, officers, "r1", "r4", "p", adj)) == false, "canDeclareWar 빈 땅 불가")
+    check((Battle.canDeclareWar(ownership, officers, "r1", "r5", "p", adj)) == false, "canDeclareWar 비인접 적 불가")
+    check((Battle.canDeclareWar(ownership, {}, "r1", "r2", "p", adj)) == false, "canDeclareWar 출진 장수 없음")
+  end
+
+  -- 2) 유닛 생성 + 스탯 공식.
+  do
+    local o = off("u1", "p", "r1", 80, 100, 50)
+    local d = off("u2", "e", "r2", 10, 20, 0)
+    local battle = Battle.create({ o, d }, "r1", "r2", "p", "e")
+    check(#battle.units == 2, "유닛 수 = 양측 장수 수")
+    local u = Battle.unitById(battle, "u1")
+    check(u.hp == 100 * b.hpPerTroop, "유닛 HP = 병력 * hpPerTroop")
+    check(u.atk == math.floor(b.atkBase + 80 * b.atkPerMight + 50 * b.atkPerTraining), "유닛 공격력 공식(무력+훈련도)")
+    check(u.def == math.floor(b.defBase + 80 * b.defPerMight + 50 * b.defPerTraining), "유닛 방어력 공식")
+    check(o.actionDone == true, "출진 공격 장수 행동 소진")
+  end
+
+  -- 3) 데미지 + 전멸 승패.
+  do
+    local atk = off("atk1", "p", "r1", 100, 200, 0)
+    local def = off("def1", "e", "r2", 10, 20, 0)
+    local battle = Battle.create({ atk, def }, "r1", "r2", "p", "e")
+    local ua = Battle.unitById(battle, "atk1")
+    local ud = Battle.unitById(battle, "def1")
+    -- 인접 칸으로 옮겨 공격 가능하게(맨해튼 1).
+    ua.x, ua.y = 1, 0; ud.x, ud.y = 2, 0
+    check(Battle.canAttack(battle, ua, ud) == true, "사거리 내 공격 가능")
+    local dmg = Battle.damageOf(ua, ud)
+    check(dmg == math.max(b.minDamage, ua.atk - ud.def), "데미지 = max(min, 공격-방어)")
+    Battle.attack(battle, ua, ud)
+    check(ud.hp == 0, "데미지로 방어 유닛 HP 0(병력 20 < 데미지)")
+    check(battle.over == true and battle.result == Battle.SIDE.atk, "한쪽 전멸 → 종료, 공격 승")
+  end
+
+  -- 4) 결과 반영 — 공격 승(소유권 이전 + 포획 훅 + 점령 입성 + 태수 재선정).
+  do
+    local a1 = off("a1", "p", "r1", 80, 100, 0)
+    local d1 = off("d1", "e", "r2", 50, 80, 0)
+    local officers = { a1, d1 }
+    local ownership = { r1 = "p", r2 = "e" }
+    local governors = { r1 = "a1", r2 = "d1" }
+    local battle = {
+      from = "r1", to = "r2", atkFaction = "p", defFaction = "e",
+      over = true, result = Battle.SIDE.atk,
+      units = {
+        { officerId = "a1", side = Battle.SIDE.atk, hp = 60 }, -- 생존
+        { officerId = "d1", side = Battle.SIDE.def, hp = 0 },  -- 전멸
+      },
+    }
+    local captured
+    Battle.resolve(battle, officers, ownership, governors,
+      function() return 1 end, function(rid, fid, defs) captured = defs end)
+    check(ownership.r2 == "p", "공격 승 → 소유권 이전")
+    check(a1.region == "r2" and a1.troops == 60, "생존 공격 장수 점령 입성 + 잔여 병력")
+    check(captured and #captured == 1 and captured[1].id == "d1", "포획 훅에 방어 장수 전달")
+    check(d1.region == nil and d1.troops == 0, "방어 장수 보드에서 제거(포획 후보)")
+    check(governors.r2 == "a1", "점령지 태수 재선정(공격 장수)")
+    check(ownership.r1 == nil, "출발지 active 0명 → 중립 강등(정합성)")
+  end
+
+  -- 5) 결과 반영 — 공격 패(소유권 유지 + 공격 장수 출발지 복귀 + 병력 손실).
+  do
+    local a1 = off("a1", "p", "r1", 80, 100, 0)
+    local d1 = off("d1", "e", "r2", 50, 80, 0)
+    local officers = { a1, d1 }
+    local ownership = { r1 = "p", r2 = "e" }
+    local governors = { r1 = "a1", r2 = "d1" }
+    local battle = {
+      from = "r1", to = "r2", atkFaction = "p", defFaction = "e",
+      over = true, result = Battle.SIDE.def,
+      units = {
+        { officerId = "a1", side = Battle.SIDE.atk, hp = 0 },  -- 공격 전멸
+        { officerId = "d1", side = Battle.SIDE.def, hp = 30 }, -- 방어 생존
+      },
+    }
+    Battle.resolve(battle, officers, ownership, governors, function() return 1 end, nil)
+    check(ownership.r2 == "e", "공격 패 → 소유권 유지")
+    check(a1.region == "r1" and a1.troops == 0, "공격 장수 출발지 복귀 + 병력 손실")
+    check(d1.troops == 30, "방어 장수 잔여 병력 유지")
+  end
+
+  -- 6) 적 턴 휴리스틱(가장 가까운 적으로 이동 후 사거리 내면 공격).
+  do
+    local a1 = off("a1", "p", "r1", 100, 200, 80)
+    local d1 = off("d1", "e", "r2", 50, 50, 0)
+    local battle = Battle.create({ a1, d1 }, "r1", "r2", "p", "e")
+    local ua = Battle.unitById(battle, "a1")
+    local ud = Battle.unitById(battle, "d1")
+    ua.x, ua.y = 3, 2; ud.x, ud.y = 5, 2 -- 거리 2: 이동력 2로 4,2 까지(공격 유닛에 막힘) 후 사거리 1 공격
+    local hp0 = ua.hp
+    Battle.aiTurn(battle, nil)
+    check(ud.x == 4 and ud.y == 2, "AI 가장 가까운 적으로 이동")
+    check(ua.hp < hp0, "AI 사거리 내면 공격")
+  end
+end
+
+-- ── 포로/등용/처형 (captive, GDD 14장, 시드 고정) ────────
+do
+  local S = GameState.STATE
+  local function off(id, faction, loyalty, equip)
+    return { id = id, name = id, faction = faction, region = nil, state = S.active,
+             might = 50, intel = 50, pol = 50, hp = 50, troops = 0, training = 0,
+             loyalty = loyalty, isLord = false, equip = equip }
+  end
+
+  -- 1) 포획 판정: rng<0.5 → 포획(captured).
+  do
+    local d = off("d1", "e", 60)
+    local ownership = { r2 = "p" } -- 잃은 지역 r2 는 공격자 소유, e 다른 지역 없음
+    local captured = Captive.processDefeated({ d }, "p", "r2", ownership, function() return 0 end)
+    check(#captured == 1 and d.state == S.captured, "포획 성공(rng<0.5) → captured")
+  end
+
+  -- 2) 도주: rng>=0.5 + 같은 세력 다른 지역 있음 → 도주(active 복귀, 그 지역으로).
+  do
+    local d = off("d2", "e", 60)
+    local ownership = { r2 = "p", r3 = "e" } -- e 가 r3 보유 → 도주지 있음
+    local captured = Captive.processDefeated({ d }, "p", "r2", ownership, function() return 0.9 end)
+    check(#captured == 0, "도주 성공(rng>=0.5) → 포획 안 됨")
+    check(d.state == S.active and d.region == "r3", "도주 → active 복귀 + 같은 세력 지역으로")
+  end
+
+  -- 3) 도주지 없음 → 전원 포획(rng>=0.5 여도).
+  do
+    local d = off("d3", "e", 60)
+    local ownership = { r2 = "p" } -- e 의 다른 지역 없음
+    local captured = Captive.processDefeated({ d }, "p", "r2", ownership, function() return 0.9 end)
+    check(#captured == 1 and d.state == S.captured, "도주지 없으면 포획")
+  end
+
+  -- 4) 등용 확률: 충성 낮을수록 ↑, 상한 클램프.
+  do
+    local c = config.captive
+    check(approx(Captive.recruitChance({ loyalty = 100 }), c.recruitBase), "등용률 충성100 = base")
+    check(Captive.recruitChance({ loyalty = 0 }) == c.recruitMaxRate, "등용률 충성0 → maxRate 클램프")
+    check(Captive.recruitChance({ loyalty = 30 }) > Captive.recruitChance({ loyalty = 80 }), "등용률 충성 낮을수록 ↑")
+  end
+
+  -- 5) 등용 성공(rng=0): 편입 + 장비 동반.
+  do
+    local item = { id = "sword", name = "검", force = 10 }
+    local d = off("d4", "e", 20, item); d.state = S.captured
+    local ok = Captive.attemptRecruit(d, "p", "r2", function() return 0 end)
+    check(ok == true, "등용 성공(rng=0)")
+    check(d.state == S.active and d.faction == "p" and d.region == "r2", "등용 → 세력 편입 + 배치")
+    check(d.loyalty == config.captive.initLoyalty and d.isLord == false, "등용 후 초기 충성 + 군주 해제")
+    check(d.equip == item, "등용 시 장비 동반")
+  end
+
+  -- 6) 등용 실패(rng=0.99): 포로 유지.
+  do
+    local d = off("d5", "e", 90); d.state = S.captured
+    local ok = Captive.attemptRecruit(d, "p", "r2", function() return 0.99 end)
+    check(ok == false and d.state == S.captured, "등용 실패 → 포로 유지")
+  end
+
+  -- 7) 처형: 사망 + 장비 군주 귀속.
+  do
+    local item = { id = "spear", name = "창", force = 8 }
+    local d = off("d6", "e", 40, item); d.state = S.captured
+    local inv = {}
+    Captive.execute(d, inv)
+    check(d.state == S.dead and d.region == nil, "처형 → 사망")
+    check(#inv == 1 and inv[1] == item and d.equip == nil, "처형 시 장비 군주 장비고 귀속")
+  end
+end
+
+-- ── 자동 전투 + 전략 AI (battle.autoBattle / ai, 시드 고정) ──
+do
+  local S = GameState.STATE
+  local function off(id, faction, region, might, troops, training)
+    return { id = id, name = id, faction = faction, region = region, state = S.active,
+             might = might, intel = 50, pol = 50, hp = 50,
+             troops = troops or 0, training = training or 0,
+             moving = false, actionDone = false, equip = nil, loyalty = 70, isLord = false }
+  end
+  local function rng0() return 0 end
+  local function rng1() return 1 end
+
+  -- autoBattle: 강한 공격(전멸 승) → result atk.
+  do
+    local atk = off("a", "p", "r1", 100, 500, 80)
+    local def = off("d", "e", "r2", 10, 30, 0)
+    local battle = Battle.autoBattle({ atk, def }, "r1", "r2", "p", "e", rng0)
+    check(battle.over == true and battle.result == Battle.SIDE.atk, "autoBattle 강한 공격 → 공격 승")
+  end
+
+  -- AI.run: 병력 부족 + 공격 후보 없음 → 징병.
+  do
+    local o = off("ai1", "e", "r1", 50, 10, 0) -- 병력 10(<minTroopsToAttack, <lowTroops)
+    local officers = { o }
+    local regions = { { id = "r1", q = 0, r = 0 } }
+    local ownership = { r1 = "e" }
+    local regionState = { r1 = { id = "r1", name = "R1", gold = 1000, pop = 80, loyal = 60,
+      flood = 80, commerce = 80, land = 80,
+      devDone = { flood = false, loyal = false, commerce = false, land = false }, searchDone = false } }
+    local governors = { r1 = "ai1" }
+    AI.run({ officers = officers, regions = regions, ownership = ownership, regionState = regionState,
+      governors = governors, factionInventory = {}, playerFid = "p",
+      isAdjacent = function() return false end, rng = rng0, rng1n = rng1 })
+    check(o.troops > 10, "AI 병력 부족 → 징병(병력 증가)")
+  end
+
+  -- AI.run: 병력 충분 + 공격 후보 없음 + 내정 낮음 → 개발.
+  do
+    local o = off("ai2", "e", "r1", 50, 300, 100) -- 병력·훈련 충분 → 징병/훈련 스킵
+    local officers = { o }
+    local regions = { { id = "r1", q = 0, r = 0 } }
+    local ownership = { r1 = "e" }
+    local regionState = { r1 = { id = "r1", name = "R1", gold = 1000, pop = 80, loyal = 60,
+      flood = 10, commerce = 10, land = 10, -- 치수 낮음 → 개발 대상
+      devDone = { flood = false, loyal = false, commerce = false, land = false }, searchDone = false } }
+    local governors = { r1 = "ai2" }
+    local floodBefore = regionState.r1.flood
+    AI.run({ officers = officers, regions = regions, ownership = ownership, regionState = regionState,
+      governors = governors, factionInventory = {}, playerFid = "p",
+      isAdjacent = function() return false end, rng = rng0, rng1n = rng1 })
+    check(regionState.r1.flood > floodBefore, "AI 내정 낮음 → 개발(수치 상승)")
+  end
+
+  -- AI.run: 인접 플레이어 지역 + 충분히 유리 → 자동 전투로 점령(소유권 이전).
+  do
+    local aiGen = off("aiG", "e", "r1", 100, 500, 80)
+    local plGen = off("plG", "p", "r2", 10, 20, 0)
+    local officers = { aiGen, plGen }
+    local regions = { { id = "r1" }, { id = "r2" } }
+    local ownership = { r1 = "e", r2 = "p" }
+    local regionState = {
+      r1 = { id="r1", gold=0, pop=0, loyal=0, flood=99, commerce=99, land=99, devDone={flood=true,loyal=true,commerce=true,land=true}, searchDone=true },
+      r2 = { id="r2", gold=0, pop=0, loyal=0, flood=99, commerce=99, land=99, devDone={flood=true,loyal=true,commerce=true,land=true}, searchDone=true },
+    }
+    local governors = { r1 = "aiG", r2 = "plG" }
+    AI.run({ officers = officers, regions = regions, ownership = ownership, regionState = regionState,
+      governors = governors, factionInventory = {}, playerFid = "p",
+      isAdjacent = function(a, b) return (a=="r1" and b=="r2") or (a=="r2" and b=="r1") end,
+      rng = rng0, rng1n = rng1 })
+    check(ownership.r2 == "e", "AI 유리한 공격 → 플레이어 지역 점령(소유권 이전)")
+  end
 end
 
 -- ── 결과 ─────────────────────────────────────────────────

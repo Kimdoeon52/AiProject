@@ -23,6 +23,7 @@ local config = require("config")
 local UI = require("ui")
 local Region = require("region")
 local GameState = require("game_state")
+local Develop = require("develop") -- 재야 등용 규칙(GDD 14장) — 장수 목록에서 재야 클릭 시 사용
 
 local Popup = {}
 
@@ -47,19 +48,48 @@ local function closeButton(px, py, pw)
   return UI.newButton(px + pw - s - 10, py + 10, s, s, "X", "close")
 end
 
---- 장수 목록 팝업의 각 줄(장수 1명) 버튼. draw·클릭 공유 레이아웃.
--- @return table  UI 버튼 배열(value = 장수 id)
+--- 장수 목록 팝업을 "소속 / 재야" 두 섹션으로 나눠 배치한다. draw·클릭 공유 레이아웃.
+-- 반환 항목은 3종: 섹션 헤더 {header,x,y} / 장수 버튼 {btn,officer} / 빈 표시 {note,x,y}.
+--   draw 와 consumeClick 이 같은 함수를 써서 좌표가 어긋나지 않게 한다(단일 출처).
+-- @return table  위 항목들의 배열(위→아래 순서)
 local function officerRows(state, px, py, pw)
   local rows = {}
   if not (state.selectedId and state.officers) then return rows end
   local here = GameState.officersInRegion(state.officers, state.selectedId)
+  -- 소속(active) / 재야(free) 분리 — 섹션을 위·아래로 나눈다(항목 5).
+  local actives, frees = {}, {}
+  for _, o in ipairs(here) do
+    if o.state == GameState.STATE.active then
+      actives[#actives + 1] = o
+    elseif o.state == GameState.STATE.free then
+      frees[#frees + 1] = o
+    end
+  end
+
   local pad, rh, rg = config.popup.pad, config.popup.rowHeight, config.popup.rowGap
   local x = px + pad
-  local y0 = py + pad + 46 -- 제목 아래
   local w = pw - pad * 2
-  for i, o in ipairs(here) do
-    rows[i] = UI.newButton(x, y0 + (i - 1) * (rh + rg), w, rh, o.name, o.id)
+  local y = py + pad + 46 -- 제목 아래
+  local headerH = 26      -- 섹션 헤더 줄 높이
+
+  -- 한 섹션(헤더 + 장수들)을 rows 에 누적하고 y 를 아래로 민다.
+  local function addSection(title, list)
+    rows[#rows + 1] = { header = title, x = x, y = y }
+    y = y + headerH
+    if #list == 0 then
+      rows[#rows + 1] = { note = "없음", x = x + 8, y = y }
+      y = y + rh
+    else
+      for _, o in ipairs(list) do
+        rows[#rows + 1] = { btn = UI.newButton(x, y, w, rh, o.name, o.id), officer = o }
+        y = y + rh + rg
+      end
+    end
+    y = y + 10 -- 섹션 사이 간격
   end
+
+  addSection("소속 장수", actives)
+  addSection("재야 장수", frees)
   return rows
 end
 
@@ -176,8 +206,18 @@ local function drawOfficerList(state, px, py, pw)
     love.graphics.print("이 지역에 장수가 없습니다.", px + pad, py + pad + 50)
     return
   end
-  for _, btn in ipairs(rows) do
-    UI.draw(btn, { hovered = UI.hit(btn, mx, my), accent = config.colors.selectBorder })
+  -- rows 는 헤더/버튼/빈표시 3종이 섞여 있다 — 종류별로 그린다.
+  for _, r in ipairs(rows) do
+    if r.header then
+      love.graphics.setColor(config.colors.selectBorder) -- 섹션 제목 강조색
+      love.graphics.print(r.header, r.x, r.y)
+    elseif r.note then
+      love.graphics.setColor(0.6, 0.62, 0.68)
+      love.graphics.print(r.note, r.x, r.y)
+    elseif r.btn then
+      -- 재야 장수는 등용 대상이라 같은 버튼으로(클릭 시 상세→등용). 표시만 살짝 구분.
+      UI.draw(r.btn, { hovered = UI.hit(r.btn, mx, my), accent = config.colors.selectBorder })
+    end
   end
 end
 
@@ -218,15 +258,20 @@ local function actionRows(state, px, py, pw)
   local x = px + pad
   local y0 = py + pad + 46
   local w = pw - pad * 2
-  for i, o in ipairs(here) do
-    local cap = GameState.troopsCap(o)
-    -- 병력 현황·훈련도를 라벨에 표시(징병 한도/훈련 진행 확인용). 훈련도는 내림 정수로.
-    local label = string.format("%s   병력 %d/%d   훈련 %d", o.name, o.troops, cap, math.floor(o.training))
-    rows[i] = {
-      btn = UI.newButton(x, y0 + (i - 1) * (rh + rg), w, rh, label, o.id),
-      officer = o,
-      enabled = canDoAction(state, o),
-    }
+  -- 징병/훈련 대상은 소속(active) 장수만. 재야(free)는 목록에서 제외(항목 4).
+  local n = 0
+  for _, o in ipairs(here) do
+    if o.state == GameState.STATE.active then
+      n = n + 1
+      local cap = GameState.troopsCap(o)
+      -- 병력 현황·훈련도를 라벨에 표시(징병 한도/훈련 진행 확인용). 훈련도는 내림 정수로.
+      local label = string.format("%s   병력 %d/%d   훈련 %d", o.name, o.troops, cap, math.floor(o.training))
+      rows[n] = {
+        btn = UI.newButton(x, y0 + (n - 1) * (rh + rg), w, rh, label, o.id),
+        officer = o,
+        enabled = canDoAction(state, o),
+      }
+    end
   end
   return rows
 end
@@ -260,6 +305,30 @@ local function drawActionList(state, px, py, pw, ph)
   end
 end
 
+--- 재야 등용을 수행할 장수(선택 지역 기준). 태수 우선, 없으면 그 지역 첫 active 플레이어 장수.
+-- 조건: 플레이어 세력 + 이번 턴 행동 가능(canAct). 없으면 nil.
+--   ── 왜 수행 장수가 필요: 등용 성공률은 수행 장수 정치에 비례(GDD 14장).
+local function recruitPerformer(state)
+  if not (state.selectedId and state.officers) then return nil end
+  -- 태수 우선(그 지역 행정 책임자).
+  local govId = state.governors and state.governors[state.selectedId]
+  if govId then
+    local g = GameState.byId(state.officers, govId)
+    if g and g.faction == state.playerFactionId and GameState.canAct(g) then return g end
+  end
+  -- 없으면 그 지역 첫 active 플레이어 장수.
+  for _, o in ipairs(GameState.officersInRegion(state.officers, state.selectedId)) do
+    if o.faction == state.playerFactionId and GameState.canAct(o) then return o end
+  end
+  return nil
+end
+
+--- 장수 상세 하단의 "등용" 버튼(재야 장수용, 전폭).
+local function recruitActionButton(px, py, pw, ph)
+  local pad, bh = config.popup.pad, config.popup.buttonHeight
+  return UI.newButton(px + pad, py + ph - pad - bh, pw - pad * 2, bh, "등용", "doRecruit")
+end
+
 --- 장수 상세 팝업 본문(GDD 7·8장 표시 항목).
 local function drawOfficerDetail(state, px, py, pw, ph)
   local o = detailOfficer(state)
@@ -284,8 +353,10 @@ local function drawOfficerDetail(state, px, py, pw, ph)
   love.graphics.print("충성도: " .. tostring(GameState.loyaltyText(o)), x, y); y = y + gap
   love.graphics.print("보유 병력: " .. (o.troops or 0), x, y); y = y + gap
   love.graphics.print("소속 세력: " .. officerFactionName(state, o), x, y); y = y + gap
+  -- 위치: 이동/수송 중이면 어느 지역에도 없으므로(region=nil) "이동 중"으로 표시(GDD 12장).
   local r = o.region and Region.byId(state.regions, o.region)
-  love.graphics.print("위치 지역: " .. (r and r.name or "-"), x, y); y = y + gap
+  local locText = o.moving and "이동 중" or (r and r.name or "-")
+  love.graphics.print("위치 지역: " .. locText, x, y); y = y + gap
   love.graphics.print("상태: " .. (STATE_KR[o.state] or o.state), x, y); y = y + gap + 6
   -- (태수 정보는 장수 상세가 아니라 지역 정보 패널에만 표시한다 — drawRegionInfo.)
 
@@ -296,6 +367,34 @@ local function drawOfficerDetail(state, px, py, pw, ph)
     love.graphics.print("보유 장비: 없음", x, y)
   end
   y = y + gap
+
+  -- 재야(free) 장수: 등용 UI 노출(GDD 14장). 인재 탐색으로 발견된 재야만 등용 가능.
+  if o.state == GameState.STATE.free then
+    local performer = recruitPerformer(state)
+    local ok = (Develop.canRecruit(o, performer)) -- draw 는 가능 여부만 필요(사유는 클릭 시)
+    -- 성공률·수행 장수 안내(있을 때).
+    if performer then
+      love.graphics.setColor(config.colors.panelValue)
+      love.graphics.print(string.format("등용 성공률 %.0f%% (수행: %s)",
+        Develop.recruitChance(performer) * 100, performer.name), x, y)
+    else
+      love.graphics.setColor(0.7, 0.72, 0.78)
+      love.graphics.print("등용할 수행 장수 없음(소유 지역·행동 가능 장수 필요)", x, y)
+    end
+    y = y + gap
+    -- 등용 결과/불가 사유.
+    if state.notice then
+      love.graphics.setColor(config.colors.panelValue)
+      love.graphics.print(state.notice, x, y)
+    end
+    local btn = recruitActionButton(px, py, pw, ph)
+    if ok then
+      UI.draw(btn, { hovered = UI.hit(btn, mx, my), accent = config.colors.selectBorder })
+    else
+      UI.draw(btn, DISABLED) -- 미발견/수행 장수 없음 → 비활성. reason 은 클릭 시 notice 로.
+    end
+    return
+  end
 
   -- 액션 버튼: 플레이어 세력 active 장수에게만 노출(GDD 8·15장).
   local isPlayer = (o.faction == state.playerFactionId) and (o.state == GameState.STATE.active)
@@ -613,6 +712,26 @@ function Popup.consumeClick(state, x, y)
       return true
     end
     local o = detailOfficer(state)
+    -- 재야(free) 장수: "등용" 버튼 클릭 → 등용 시도(GDD 14장). 규칙은 develop.lua.
+    if o and o.state == GameState.STATE.free then
+      local btn = recruitActionButton(px, py, pw, ph)
+      if UI.hit(btn, x, y) then
+        local performer = recruitPerformer(state)
+        local ok, reason = Develop.canRecruit(o, performer)
+        if ok then
+          -- rng 은 main 이 주입(love.math.random). 성공/실패 무관 수행 장수 행동 소진.
+          local success = Develop.attemptRecruit(o, performer, state.playerFactionId, state.rng)
+          if success then
+            state.notice = o.name .. " 등용 성공"
+          else
+            state.notice = o.name .. " 등용 실패"
+          end
+        else
+          state.notice = reason or "등용 불가"
+        end
+      end
+      return true
+    end
     local isPlayer = o and (o.faction == state.playerFactionId) and (o.state == GameState.STATE.active)
     if isPlayer then
       local govBtn, goldBtn, equipBtn = detailButtons(px, py, pw, ph)
@@ -639,12 +758,14 @@ function Popup.consumeClick(state, x, y)
     return true
   end
 
-  -- 장수 목록: X=목록 닫기 / 항목 클릭 = 상세 열기.
+  -- 장수 목록: X=목록 닫기 / 장수 버튼 클릭 = 상세 열기(재야도 상세→등용).
   if UI.hit(cb, x, y) then
     state.listOpen = false
   else
-    for _, btn in ipairs(officerRows(state, px, py, pw)) do
-      if UI.hit(btn, x, y) then state.detailId = btn.value; break end
+    for _, r in ipairs(officerRows(state, px, py, pw)) do
+      if r.btn and UI.hit(r.btn, x, y) then
+        state.detailId = r.btn.value; state.notice = nil; break
+      end
     end
   end
   return true

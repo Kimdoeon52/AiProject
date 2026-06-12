@@ -285,6 +285,23 @@ end
 --   GDD 의 "지역 병력/훈련도"는 이 모델에서 수행 장수의 troops/training 으로 매핑된다.
 --   행동 제한: 둘 다 officer.actionDone(턴 1회) 사용 → markActed 로 소진.
 
+--- 두 부대의 병력을 합칠 때의 가중평균 훈련도를 계산한다 (GDD 11장 공식 — 공용 함수).
+-- 공식: 새 훈련도 = (기존병력*기존훈련도 + 합류병력*합류훈련도) / (기존+합류).
+--   왜 가중평균: 숙련이 다른 두 부대가 합쳐지면 병력 수에 비례해 평균 숙련이 정해진다.
+--   재사용처(중복 구현 금지): ① 징병(신병 훈련도 0 합류, applyRecruit)
+--                            ② 이동 도착 시 병력 합류(movement.processArrival).
+--   두 병력 합이 0이면 0 나누기(0/0 = nan) 방지로 0 을 돌려준다.
+-- @param oldTroops number    기존 병력
+-- @param oldTraining number  기존 훈련도(0~100)
+-- @param addTroops number    합류(또는 신규) 병력
+-- @param addTraining number  합류 병력 훈련도(징병이면 0, 이동이면 그 부대 훈련도)
+-- @return number  합친 뒤 훈련도
+function GameState.mergeTraining(oldTroops, oldTraining, addTroops, addTraining)
+  local total = oldTroops + addTroops
+  if total <= 0 then return 0 end
+  return (oldTroops * oldTraining + addTroops * addTraining) / total
+end
+
 --- 이 장수가 지금 징병할 수 있는지 검사한다(버튼 활성/실행 전 판정). 순수 함수.
 -- @param region table   대상 지역(런타임 regionState — gold 사용)
 -- @param officer table  수행 장수(might/troops/actionDone)
@@ -319,13 +336,10 @@ function GameState.applyRecruit(region, officer)
   region.loyal = math.max(0, region.loyal - config.conscript.loyaltyDropPerAction)
 
   -- 3) 훈련도 가중평균 재계산 (GDD 11장): 신규 병력 훈련도는 0.
-  --    새 훈련도 = (기존병력*기존훈련도 + 신규병력*0) / (기존+신규).
-  --    왜 가중평균: 미숙한 신병이 섞이면 부대 평균 숙련이 내려가기 때문.
-  --    old+add 가 0 이면 0 나누기(0/0 = nan) 방지 가드.
+  --    공용 mergeTraining 으로 계산(이동 도착 합류와 같은 공식 — 중복 구현 금지).
+  --    미숙한 신병(훈련0)이 섞이면 부대 평균 숙련이 내려간다.
   local old = officer.troops
-  if old + add > 0 then
-    officer.training = (old * officer.training + add * 0) / (old + add)
-  end
+  officer.training = GameState.mergeTraining(old, officer.training, add, 0)
   officer.troops = old + add
 
   -- 4) 이번 턴 행동 소진.
@@ -597,8 +611,8 @@ function GameState.demoteIfVacant(ownership, governors, officers, regionId)
   if governors then governors[regionId] = nil end -- 태수 해제
   return true
 end
--- TODO: 이동/수송/전투 시스템(GDD 12·13장) 구현 시, 출발 지역에서 active 가 빠지는 지점마다
---       demoteIfVacant(state.ownership, state.governors, state.officers, fromRegionId) 를 호출할 것.
+-- 이동/수송(GDD 12장)은 출발지에서 장수가 빠지는 즉시 movement.issueOrder 가
+--   demoteIfVacant 를 호출한다(아래 movement.lua). 전투(GDD 13장)는 구현 시 같은 훅 재사용.
 
 -- ── 지역 자원/경제 (GDD 5·9장) ───────────────────────────
 --   금·군량은 "지역별 보유"가 진실원본(세력 단일 금고 아님).

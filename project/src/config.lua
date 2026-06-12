@@ -150,6 +150,79 @@ config.training = {
   gainPerMight = 0.1,
 }
 
+-- 이동/수송 시스템 상수 (GDD 12장). 규칙 계층(movement)·표현 계층(main)이 읽어 쓴다.
+--   매직넘버 금지(CLAUDE.md): 경로 화살표 색·점선 길이를 코드에 흩지 않고 여기 한 곳에.
+--   GDD 12장: "이동 경로 점선 화살표 / 수송은 다른 색 점선 화살표".
+config.orders = {
+  moveColor      = { 0.35, 0.75, 1.00 }, -- 이동 경로 점선 색(하늘)
+  transportColor = { 1.00, 0.75, 0.25 }, -- 수송 경로 점선 색(주황) — 이동과 시각 구분
+  lineWidth = 3,   -- 경로 점선 두께(월드 px)
+  dashLen   = 18,  -- 점선 한 칸 길이(월드 px)
+  gapLen    = 12,  -- 점선 사이 빈칸 길이(월드 px)
+  headLen   = 24,  -- 화살촉 길이(월드 px) — 진행 방향(목적지) 표시
+  grainStep = 50,  -- 수송 군량 −/+ 1클릭당 증감량
+}
+
+-- 전투 시스템 상수 (GDD 13장). 규칙 계층(battle)·표현 계층(battle_view)이 읽어 쓴다.
+--   매직넘버 금지(CLAUDE.md): 그리드 크기·이동력·사거리·스탯/데미지 계수를 여기 한 곳에.
+--   GDD 13장은 "유닛 스탯 = 무력+병력+훈련도 기반"만 정하고 구체 계수는 미정 → 튜닝 상수로 둔다
+--   (config.economy/conscript 와 같은 선례). 추후 GDD 13장에 수치 한 줄 추가 권장.
+config.battle = {
+  gridW = 7,           -- 전투 그리드 가로 칸 수
+  gridH = 5,           -- 전투 그리드 세로 칸 수
+  moveRange = 2,       -- 유닛 1 전투턴 이동 칸(맨해튼 거리)
+  attackRange = 1,     -- 공격 사거리(맨해튼 거리). 1 = 인접 칸만 타격.
+
+  -- HP(내구도) = 투입 병력 * hpPerTroop. "병력 많을수록 오래 버틴다"(GDD 13장 '투입 병력' 반영).
+  hpPerTroop = 1,
+
+  -- 공격력 = atkBase + 유효무력*atkPerMight + 훈련도*atkPerTraining (GDD 13장 무력·훈련도 반영).
+  --   유효무력 = 기본 무력 + 장비 보너스(GDD 8장, effectiveStat).
+  atkBase = 10, atkPerMight = 0.5, atkPerTraining = 0.3,
+  -- 방어력 = defBase + 유효무력*defPerMight + 훈련도*defPerTraining.
+  defBase = 5, defPerMight = 0.3, defPerTraining = 0.2,
+  -- 데미지 = max(minDamage, floor(공격력 - 대상 방어력)). 방어가 더 높아도 최소 데미지는 들어간다.
+  minDamage = 1,
+  -- AI vs AI(또는 플레이어 미관여) 전투의 헤드리스 자동 해결 최대 라운드(무한 루프 방지).
+  --   교착(서로 데미지 0 불가 — minDamage 보장)이라 보통 훨씬 전에 끝나지만 안전 상한.
+  autoMaxRounds = 50,
+}
+
+-- 포로/등용/처형 상수 (GDD 14장). 규칙 계층(captive)이 읽어 쓴다. 매직넘버 금지(CLAUDE.md).
+--   GDD 14장: "점령 시 50% 포획 / 등용은 충성도 낮을수록 높음".
+config.captive = {
+  captureChance = 0.5,          -- 점령 시 적 장수 포획 확률(GDD 14장 명시값)
+  -- 등용 성공률 = clamp(base + (maxLoyalty - 충성) * perLowLoyalty, 0, maxRate).
+  --   왜 충성 낮을수록 ↑: 옛 주군에 충성 낮은 포로일수록 쉽게 귀순(GDD 14장).
+  recruitBase = 0.20,           -- 충성 최대(100)일 때 기본 등용률
+  recruitPerLowLoyalty = 0.008, -- 충성이 1 낮을수록 가산(충성0 → +0.8)
+  recruitMaxRate = 0.95,        -- 등용률 상한
+  initLoyalty = 50,             -- 등용 직후 충성(갓 항복 → 낮게)
+}
+
+-- 전략 AI 상수 (GDD 16장). 규칙 계층(ai)이 읽어 쓴다. "정교화 금지"(스코프 락) — 단순 임계값.
+config.ai = {
+  minTroopsToAttack = 50,    -- 공격 후보가 되는 출발지 최소 병력(GDD 16 "병력 일정 이상")
+  attackAdvantage = 1.3,     -- 공격 병력 ≥ 방어 병력 * 이 값일 때만 공격(GDD 16 "충분히 유리")
+  playerWeight = 1.15,       -- 플레이어 지역 공격 추가 가중(우선 선택, GDD 16)
+  lowTroops = 50,            -- 이 미만이면 징병 우선(GDD 16 3순위)
+  lowTraining = 40,          -- 이 미만이면 훈련(GDD 16 4순위)
+  lowStat = 40,              -- 내정 수치 이 미만이면 개발(GDD 16 5순위)
+  investAmount = 100,        -- AI 1회 내정 투자 금액
+}
+
+-- 전투 화면 레이아웃/색 상수 (GDD 13·17장). 표현 계층(battle_view)만 읽는다.
+config.battleView = {
+  cell = 120,          -- 그리드 한 칸 한 변(px)
+  gap = 4,             -- 칸 사이 간격(px)
+  atkColor = { 0.40, 0.60, 0.95 }, -- 공격측 유닛 색(파랑)
+  defColor = { 0.90, 0.45, 0.40 }, -- 방어측 유닛 색(빨강)
+  cellBg   = { 0.16, 0.17, 0.21 }, -- 빈 칸 배경
+  moveCell = { 0.30, 0.55, 0.35, 0.55 }, -- 이동 가능 칸 하이라이트(연두, 반투명)
+  atkCell  = { 0.80, 0.30, 0.30, 0.55 }, -- 공격 가능 칸 하이라이트(빨강, 반투명)
+  selBorder = { 1.00, 0.85, 0.20 },      -- 선택 유닛 강조 테두리(노랑)
+}
+
 -- 팝업(장수 목록/상세/선물) 레이아웃 상수 (GDD 17장 팝업). main 이 읽어 배치.
 config.popup = {
   width = 600,         -- 팝업 기본 폭(px)
