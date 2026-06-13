@@ -383,18 +383,48 @@ game_data.scenarios = {
       -- 손견(형남) — 강동 4지역(건업·오군·회계·시상)은 184 배치 인물 없음 → 중립
       changsha = "sunjian", wuling = "sunjian", jiangling = "sunjian", xiangyang = "sunjian",
     },
-    -- 초기 장비 배치 (GDD 8장). 각 항목: 장비 id → owner(그 세력 군주 장수 id).
-    --   equipped 미지정(=false) → 군주 "미장착" 장비고에 들어가 선물 대상이 된다.
-    --   "시작 장비는 해당 세력 군주에게 귀속"(GDD 8장)을 군주 인벤토리로 표현.
+    -- 초기 장비 배치 (GDD 8장).
+    --   equipped = true → 해당 장수에 직접 장착(보너스 즉시 반영).
+    --   equipped 생략  → owner 세력의 군주 장비고(선물 대상).
+    --   fallback = "id" → owner 가 active 아닐 때 대신 받을 장수(데이터로 명시 — 런타임 추론 금지).
+    --   owner 비활성 + fallback 없음 → 미배치(의도적 허용, GDD 8장).
     equipment = {
-      { id = "taiping_book",  owner = "zhangjiao"  }, -- 장각: 태평요술서
-      { id = "sky_piercer",   owner = "dongzhuo"   }, -- 동탁 진영: 방천화극
-      { id = "meteor_hammer", owner = "mateng"     },
-      { id = "shu_map",       owner = "liuyan"     }, -- 익주
-      { id = "war_manual",    owner = "hejin"      },
-      { id = "ancient_blade", owner = "dingyuan"   },
-      { id = "red_hare",      owner = "gongsunzan" }, -- 백마장군
-      { id = "jade_seal",     owner = "sunjian"    }, -- 손견: 옥새(고증)
+      -- ── 황건적 (lord: zhangjiao) ──────────────────────────────────
+      -- 태평요술서: 장각이 도경(道經)을 바탕으로 거병. 직접 장착.
+      { id = "taiping_book",     owner = "zhangjiao",  equipped = true },
+      -- 둔갑천서 천권·지권: 황건 보유 도교 비서. 군주 장비고.
+      { id = "dunjia_heaven",    owner = "zhangjiao"                   },
+      { id = "dunjia_earth",     owner = "zhangjiao"                   },
+      -- ── 동탁 (lord: dongzhuo) ─────────────────────────────────────
+      -- 적토마: 189년 여포에게 증여하기 전 동탁 소유. 장비고.
+      { id = "red_hare",         owner = "dongzhuo"                    },
+      -- 의천검: 동탁 세력 장비고.
+      { id = "heaven_sword",     owner = "dongzhuo"                    },
+      -- ── 정원 (lord: dingyuan) ─────────────────────────────────────
+      -- 방천화극: 여포의 상징 무기. 여포가 dingyuan 소속 active → 직접 장착.
+      --   fallback: 여포 없으면 정원(lord) 장비고로.
+      { id = "sky_piercer",      owner = "lvbu",       equipped = true, fallback = "dingyuan" },
+      -- 고정도: 정원 장비고.
+      { id = "ancient_blade",    owner = "dingyuan"                    },
+      -- ── 마등 (lord: mateng) ───────────────────────────────────────
+      -- 유성추·삼첨양인도: 서량 병기. 장비고.
+      { id = "meteor_hammer",    owner = "mateng"                      },
+      { id = "three_point_blade",owner = "mateng"                      },
+      -- ── 유언 (lord: liuyan) ───────────────────────────────────────
+      -- 서촉지형도: 익주 통치 전략 지도. 장비고.
+      { id = "shu_map",          owner = "liuyan"                      },
+      -- ── 하진 (lord: hejin) ────────────────────────────────────────
+      -- 손자병법서·칠성검: 대장군 하진 세력 장비고.
+      { id = "war_manual",       owner = "hejin"                       },
+      { id = "seven_star",       owner = "hejin"                       },
+      -- ── 공손찬 (lord: gongsunzan) ─────────────────────────────────
+      -- 애각창: 공손찬 직접 장착.
+      { id = "mourning_spear",   owner = "gongsunzan", equipped = true },
+      -- ── 손견 (lord: sunjian) ──────────────────────────────────────
+      -- 옥새: 손견이 낙양 수복 후 수거(고증). 장비고.
+      { id = "jade_seal",        owner = "sunjian"                     },
+      -- 청공검: 손견 소유 보검. 장비고.
+      { id = "qinggang_sword",   owner = "sunjian"                     },
     },
     -- 초기 금·군량 override (GDD 9장). 미기재 지역은 regions base 기본값 사용.
     --   거병 직후라 전반적으로 base 보다 여유 적게(전란) — 핵심 거점만 소폭 조정.
@@ -508,19 +538,54 @@ game_data.scenarios = {
       chengdu = "liuzhang", jiangzhou = "liuzhang", -- 운남(남중)은 배치 인물 없음 → 중립
       hanzhong = "zhanglu",
     },
-    -- 초기 장비 배치 (GDD 8장). 군주 귀속 미장착 장비고(선물 대상). owner = 세력 군주.
+    -- 초기 장비 배치 (GDD 8장). equipped/fallback 규칙은 위 184와 동일.
     equipment = {
-      { id = "calendar_pearl",  owner = "yuanshao"   },
-      { id = "red_hare",        owner = "gongsunzan" },
-      { id = "mengde_book",     owner = "caocao"     }, -- 조조: 맹덕신서(고증)
-      { id = "dilu",            owner = "liubei"     }, -- 유비: 적로(고증)
-      { id = "great_axe",       owner = "lijue"      },
-      { id = "meteor_hammer",   owner = "mateng"     },
-      { id = "jade_seal",       owner = "yuanshu"    }, -- 원술: 옥새(고증)
-      { id = "seven_chi_spear", owner = "liubiao"    },
-      { id = "twin_swords",     owner = "sunce"      }, -- 손책: 자웅일대검(고증)
-      { id = "shu_map",         owner = "liuzhang"   }, -- 익주
-      { id = "dunjia_man",      owner = "zhanglu"    }, -- 오두미도
+      -- ── 원소 (lord: yuanshao) ────────────────────────────────────
+      { id = "calendar_pearl",    owner = "yuanshao"                     },
+      -- ── 공손찬 (lord: gongsunzan) — 조운(zhaoyun) active ─────────
+      -- 조황비전: 조운의 명마. 조운 active → 직접 장착. 없으면 공손찬 장비고.
+      { id = "zhaohuang_feidian", owner = "zhaoyun",   equipped = true, fallback = "gongsunzan" },
+      -- 애각창: 공손찬 직접 장착.
+      { id = "mourning_spear",    owner = "gongsunzan", equipped = true  },
+      -- ── 조조 (lord: caocao) — 전위(dianwei) active ───────────────
+      { id = "mengde_book",       owner = "caocao"                       },
+      -- 쌍철극: 전위의 상징 무기. 전위 active → 직접 장착. 없으면 조조 장비고.
+      { id = "twin_halberds",     owner = "dianwei",   equipped = true, fallback = "caocao" },
+      -- 의천검·손자병법서·칠성검: 조조 장비고.
+      { id = "heaven_sword",      owner = "caocao"                       },
+      { id = "war_manual",        owner = "caocao"                       },
+      { id = "seven_star",        owner = "caocao"                       },
+      -- ── 도겸·유비 (lord: liubei) — 관우·장비 active ─────────────
+      -- 적로: 유비의 명마(고증). 직접 장착.
+      { id = "dilu",              owner = "liubei",    equipped = true   },
+      -- 청룡언월도: 관우의 상징 무기. 관우 active → 직접 장착. 없으면 유비 장비고.
+      { id = "green_dragon",      owner = "guanyu",    equipped = true, fallback = "liubei" },
+      -- 장팔사모: 장비의 상징 무기. 장비 active → 직접 장착. 없으면 유비 장비고.
+      { id = "serpent_spear",     owner = "zhangfei",  equipped = true, fallback = "liubei" },
+      -- ── 이각·곽사 (lord: lijue) ──────────────────────────────────
+      { id = "great_axe",         owner = "lijue"                        },
+      -- 적토마: 정통 소유자 여포(free) → 동탁 흡수 세력 이각이 보유.
+      --   데이터로 명시: 여포(lvbu, free) → 이각(lijue, active) 체인(런타임 추론 금지).
+      { id = "red_hare",          owner = "lvbu",      fallback = "lijue" },
+      -- ── 마등 (lord: mateng) ──────────────────────────────────────
+      { id = "meteor_hammer",     owner = "mateng"                       },
+      { id = "three_point_blade", owner = "mateng"                       },
+      -- ── 원술 (lord: yuanshu) ─────────────────────────────────────
+      { id = "jade_seal",         owner = "yuanshu"                      },
+      -- ── 유표 (lord: liubiao) ─────────────────────────────────────
+      { id = "seven_chi_spear",   owner = "liubiao"                      },
+      -- ── 손책 (lord: sunce) ───────────────────────────────────────
+      -- 자웅일대검: 손책 상징 무기(고증). 직접 장착.
+      { id = "twin_swords",       owner = "sunce",     equipped = true   },
+      -- 청공검·고정도: 손견 유물 → 손책 계승. 장비고.
+      { id = "qinggang_sword",    owner = "sunce"                        },
+      { id = "ancient_blade",     owner = "sunce"                        },
+      -- ── 유장 (lord: liuzhang) ────────────────────────────────────
+      { id = "shu_map",           owner = "liuzhang"                     },
+      -- ── 장로 (lord: zhanglu) ─────────────────────────────────────
+      { id = "dunjia_man",        owner = "zhanglu"                      },
+      { id = "dunjia_heaven",     owner = "zhanglu"                      },
+      { id = "dunjia_earth",      owner = "zhanglu"                      },
     },
     -- 초기 금·군량 override (GDD 9장). 미기재 지역은 regions base 기본값.
     regionInit = {
@@ -663,11 +728,36 @@ game_data.scenarios = {
       jianye = "wu", chaisang = "wu", wujun = "wu", kuaiji = "wu",
       -- 나머지(무위·천수·하비·팽성·신야·양양·광릉·강릉·무릉·장사·운남)는 중립(미기재)
     },
-    -- 초기 장비 배치 (GDD 8장). 군주 귀속 미장착 장비고(선물 대상). owner = 세력 군주.
+    -- 초기 장비 배치 (GDD 8장). equipped/fallback 규칙은 위 184와 동일.
     equipment = {
-      { id = "bronze_sparrow", owner = "caopi"   }, -- 위: 동작대(구리 참새)
-      { id = "dilu",           owner = "liubei"  }, -- 촉: 적로(고증)
-      { id = "ancient_blade",  owner = "sunquan" }, -- 오: 고정도(손견 유물)
+      -- ── 위(조비, lord: caopi) — 사마의(simayi) active ────────────
+      -- 동작대(구리 참새): 조비 상징. 장비고.
+      { id = "bronze_sparrow",     owner = "caopi"                        },
+      -- 맹덕신서·의천검·쌍철극·칠성검: 조조 유물 → 조비 계승. 장비고.
+      { id = "mengde_book",        owner = "caopi"                        },
+      { id = "heaven_sword",       owner = "caopi"                        },
+      { id = "twin_halberds",      owner = "caopi"                        },
+      { id = "seven_star",         owner = "caopi"                        },
+      -- 손자병법서: 사마의(simayi) active → 직접 장착. 없으면 조비 장비고.
+      { id = "war_manual",         owner = "simayi",    equipped = true, fallback = "caopi" },
+      -- ── 촉(유비, lord: liubei) — 제갈량·조운 active ─────────────
+      -- 적로: 유비 직접 장착.
+      { id = "dilu",               owner = "liubei",    equipped = true   },
+      -- 학우선: 제갈량의 상징. 제갈량 active → 직접 장착. 없으면 유비 장비고.
+      { id = "crane_fan",          owner = "zhugeliang", equipped = true, fallback = "liubei" },
+      -- 조황비전: 조운 active → 직접 장착. 없으면 유비 장비고.
+      { id = "zhaohuang_feidian",  owner = "zhaoyun",   equipped = true, fallback = "liubei" },
+      -- 평만지장도: 제갈량 남만 관련 서적(221 남만 정벌 전, 서적 소유). 유비 장비고.
+      { id = "nanman_map",         owner = "liubei"                       },
+      -- 자웅일대검: 유비 장비고(dilu 장착 중이라 미장착).
+      { id = "twin_swords",        owner = "liubei"                       },
+      -- 장팔사모·청룡언월도: 장비·관우 사망 → 유비가 유물 보관. 장비고.
+      { id = "serpent_spear",      owner = "liubei"                       },
+      { id = "green_dragon",       owner = "liubei"                       },
+      -- ── 오(손권, lord: sunquan) ──────────────────────────────────
+      -- 고정도·청공검: 손견·손책 유물 → 손권 계승. 장비고.
+      { id = "ancient_blade",      owner = "sunquan"                      },
+      { id = "qinggang_sword",     owner = "sunquan"                      },
     },
     -- 초기 금·군량 override (GDD 9장). 삼국 정립 — 3국 수도는 풍요. 미기재는 base.
     regionInit = {
@@ -761,6 +851,41 @@ game_data.scenarios = {
       { id = "chengyi",    region = "wuwei",    state = "free" },
     },
   },
+}
+
+-- ── 군량 가격 월별 범위 (GDD 9장) ─────────────────────────────
+--
+--   단위: 금 1당 받을 수 있는 쌀 양(정수, region.ricePrice 로 저장).
+--     값이 클수록 → 쌀이 저렴(금으로 많이 살 수 있음).
+--     값이 작을수록 → 쌀이 비쌈(금으로 조금밖에 못 삼).
+--
+--   계절 원리 (GDD 9장 "월별 기본가 + 무작위 변동"):
+--     · 봄~초여름(2~6월): 묵은 재고 소진 → 가격 상승 → 금1당 쌀 감소.
+--     · 6월: 수확 직전 최고가(금1당 쌀 최솟값). 품귀.
+--     · 7월: 수확 직후 최저가(금1당 쌀 최댓값). 풍요 급락.
+--     · 늦여름~가을(8~10월): 풍요 지속, 점차 가격 회복(금1당 쌀 서서히 감소).
+--     · 겨울(11~1월): 재고 감소 시작, 중간 수준 유지.
+--
+--   형식: game_data.ricePriceRange[월번호] = {최솟값, 최댓값}
+--     → GameState.updateGrainPrices 가 [min, max] 안에서 지역별 독립 랜덤 산정.
+--     → C# 배열 초기화와 같은 방식: int[] prices = {min, max};
+--
+--   수치 설계 기준(밸런싱 대상):
+--     min ≥ 1 (0이 되면 무한 쌀 가능 → 방지).
+--     7월이 6월의 3배 이상 차이 → "수확이 가격을 극적으로 바꾼다"는 게임 느낌.
+game_data.ricePriceRange = {
+  [1]  = {3, 5},  -- 1월:  겨울, 재고 서서히 감소 — 중간 가격
+  [2]  = {2, 4},  -- 2월:  겨울 끝, 재고 줄어 약간 비싸짐
+  [3]  = {2, 4},  -- 3월:  봄 시작, 묵은 재고 바닥 나기 시작
+  [4]  = {1, 3},  -- 4월:  봄, 가격 상승 추세
+  [5]  = {1, 3},  -- 5월:  초여름, 본격적으로 비쌈
+  [6]  = {1, 2},  -- 6월:  수확 직전 최고가 (금1당 쌀 최솟값)
+  [7]  = {6, 9},  -- 7월:  수확 직후 최저가 (금1당 쌀 최댓값) ← 급락
+  [8]  = {5, 7},  -- 8월:  여름 끝, 수확 풍요 지속
+  [9]  = {4, 6},  -- 9월:  가을, 소비 증가로 완만한 가격 회복
+  [10] = {3, 5},  -- 10월: 가을 중반, 재고 재정비
+  [11] = {3, 5},  -- 11월: 겨울 시작, 중간 수준
+  [12] = {3, 5},  -- 12월: 겨울, 이후 감소 예고
 }
 
 return game_data

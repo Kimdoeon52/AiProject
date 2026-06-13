@@ -133,23 +133,30 @@ local function placeSide(list, side, colX)
 end
 
 --- 전투를 생성한다 (GDD 13장). 양측 장수 수만큼 유닛 + 좌/우 배치.
--- 부작용: 공격측 장수는 이번 전략 턴 행동 소진(actionDone=true) — 전투에 나선 셈.
+-- 부작용: 출진 선택 장수(atkList)만 이번 전략 턴 행동 소진(actionDone=true).
+--   잔류 장수(미선택)는 actionDone 이 설정되지 않아 계속 명령 가능.
 -- @param officers table     런타임 장수 전체
 -- @param fromId,toId string 출발지(공격)·목적지(방어=공격 대상)
 -- @param atkFaction any     공격 세력 id
 -- @param defFaction any     방어 세력 id(= ownership[toId])
+-- @param atkList table|nil  플레이어가 선택한 출진 장수 목록(GDD 13장 "장수 단위 출진").
+--   · nil 이면 출발지 active 장수 전원 자동 선택(AI autoBattle 경유).
+--   · 선택한 장수의 병력은 전부 함께 출전(부분 병력 분할 불가 — 장수=병력 묶음).
+--   · 미선택 장수는 출발지 잔류 → 유닛 미생성 → 전투 후에도 fromId 유지.
 -- @return table  battle 상태
-function Battle.create(officers, fromId, toId, atkFaction, defFaction)
+function Battle.create(officers, fromId, toId, atkFaction, defFaction, atkList)
   local b = config.battle
-  local atkList = Battle.marchers(officers, fromId, atkFaction)
+  -- 공격 장수 목록: 호출자가 선택 목록을 주면 그것을 사용(플레이어 선택 모드).
+  -- nil 이면 marchers() 로 출발지 전원 자동(AI autoBattle 경유).
+  local atkOfficers = atkList or Battle.marchers(officers, fromId, atkFaction)
   local defList = Battle.marchers(officers, toId, defFaction)
 
   local units = {}
-  for _, u in ipairs(placeSide(atkList, Battle.SIDE.atk, 0)) do units[#units + 1] = u end
+  for _, u in ipairs(placeSide(atkOfficers, Battle.SIDE.atk, 0)) do units[#units + 1] = u end
   for _, u in ipairs(placeSide(defList, Battle.SIDE.def, b.gridW - 1)) do units[#units + 1] = u end
 
-  -- 공격측 장수: 전투 출진 = 이번 턴 행동 소진(중복 명령 방지).
-  for _, o in ipairs(atkList) do o.actionDone = true end
+  -- 출진 선택 장수만 행동 소진. 잔류 장수는 계속 행동 가능(GDD 13장).
+  for _, o in ipairs(atkOfficers) do o.actionDone = true end
 
   local battle = {
     from = fromId, to = toId,
@@ -354,9 +361,11 @@ end
 -- @param fromId,toId string 출발지(공격)·목적지(방어)
 -- @param atkFaction,defFaction any
 -- @param rng function|nil
+-- @param atkList table|nil  AI 가 선택한 출진 장수 목록(최소 1명 잔류 규칙 적용 후 전달).
+--   nil 이면 marchers() 전원 자동. create() 와 동일 의미.
 -- @return table  battle(over=true, result 설정됨)
-function Battle.autoBattle(officers, fromId, toId, atkFaction, defFaction, rng)
-  local battle = Battle.create(officers, fromId, toId, atkFaction, defFaction)
+function Battle.autoBattle(officers, fromId, toId, atkFaction, defFaction, rng, atkList)
+  local battle = Battle.create(officers, fromId, toId, atkFaction, defFaction, atkList)
   local rounds = 0
   while not battle.over and rounds < config.battle.autoMaxRounds do
     Battle.sideTurn(battle, Battle.SIDE.atk, rng)

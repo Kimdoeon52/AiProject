@@ -407,38 +407,159 @@ function GameState.hasStatBonus(officer, statKey)
 end
 
 --- 시나리오 초기 장비를 적용한다 (GDD 8장).
--- 흐름: scenario.equipment{ id, owner, equipped? } → items 베이스 조회 →
---   equipped 면 군주(owner)에게 장착(officer.equip), 아니면 그 세력 "미장착 장비고"에 적재.
+--
+-- 흐름:
+--   scenario.equipment{ id, owner, equipped?, fallback? } 순회
+--   → items 베이스 조회
+--   → owner 가 active 인지 확인. free/unrevealed/dead 이면 fallback 시도.
+--   → equipped=true 면 해당 장수에 직접 장착(officer.equip). 아니면 세력 장비고.
+--   → fallback 도 비활성이면 미배치(로그만, 오류 아님 — GDD 8장 허용).
+--
+-- "왜 active 체크가 필요한가":
+--   free(재야) 장수는 faction=nil이라 장비고(inventory[nil])가 생기고 선물 불가.
+--   active 만 세력이 있어 장비고 귀속이 의미 있다.
+--
 -- 부작용: 해당 owner 장수의 equip 설정(장착분). 새 장비고 테이블 반환(원본 불변).
 -- @param gameData table  items 보유
 -- @param scenario table  equipment 배치 + factions
--- @param officers table  런타임 장수(buildOfficers 결과; owner 의 faction 확인용)
--- @return table  factionInventory = { [factionId] = { 장비레코드, ... } }  (미장착·선물용)
+-- @param officers table  런타임 장수(buildOfficers 결과)
+-- @return table  factionInventory = { [factionId] = { 장비레코드, ... } }
 function GameState.applyInitialEquipment(gameData, scenario, officers)
+  -- C# Dictionary<string,Item> / C++ unordered_map 방식의 조회 인덱스.
   local itemById = {}
   for _, it in ipairs(gameData.items) do itemById[it.id] = it end
   local offById = {}
   for _, o in ipairs(officers) do offById[o.id] = o end
 
+  -- 베이스 → 런타임 장비 레코드(얕은 복사).
+  -- "왜 복사": 같은 베이스를 여러 장수가 나눠 가져도 서로 독립 인스턴스가 된다.
+  local function makeRec(base)
+    return { id = base.id, name = base.name,
+             hp = base.hp, force = base.force,
+             intelligence = base.intelligence, politics = base.politics }
+  end
+
+  -- active 장수인지 판정. free/unrevealed/dead 는 세력 없어 장비고 귀속 불가.
+  local function isActive(o)
+    return o ~= nil and o.state == GameState.STATE.active
+  end
+
   local inventory = {}
+
   for _, place in ipairs(scenario.equipment or {}) do
     local base = itemById[place.id]
-    local owner = offById[place.owner]
-    if base and owner then
-      -- 장비 인스턴스(베이스의 얕은 복사) — 같은 베이스로 여러 자루가 생겨도 서로 독립.
-      local rec = { id = base.id, name = base.name,
-                    hp = base.hp, force = base.force,
-                    intelligence = base.intelligence, politics = base.politics }
-      if place.equipped then
-        owner.equip = rec
-      else
-        local fid = owner.faction
-        inventory[fid] = inventory[fid] or {}
-        table.insert(inventory[fid], rec)
+    if not base then
+      -- items 베이스에 없는 id → 데이터 오류 경고.
+      print(string.format("[장비경고] '%s': items 베이스에 없음", place.id or "?"))
+    else
+      -- 정통 소유자 탐색. active 아니면 fallback 시도.
+      local owner = offById[place.owner]
+      local usedFallback = false
+      if not isActive(owner) then
+        if place.fallback then
+          local fb = offById[place.fallback]
+          if isActive(fb) then
+            -- fallback 적용 — 왜 fallback 인지 추적 가능하게 로그.
+            owner = fb
+            usedFallback = true
+            print(string.format("[장비] '%s': %s(비활성) → %s(fallback)",
+              place.id, place.owner, place.fallback))
+          else
+            print(string.format("[장비] '%s': %s(비활성), fallback %s도 비활성 → 미배치",
+              place.id, place.owner or "?", place.fallback))
+            owner = nil
+          end
+        else
+          -- fallback 없는 비활성 소유자 → 미배치(의도된 누락, GDD 8장).
+          if place.owner then
+            print(string.format("[장비] '%s': %s 없음/비활성, fallback 없음 → 미배치",
+              place.id, place.owner))
+          end
+          owner = nil
+        end
+      end
+
+      if owner then
+        local rec = makeRec(base)
+        -- equipped=true 이고 fallback 미사용 → 해당 장수 직접 장착(GDD 8장 1장수 1장착).
+        if place.equipped and not usedFallback then
+          if owner.equip then
+            -- 이미 장착 중이면 장비고로 내림(1장수 1장착 원칙 유지).
+            local fid = owner.faction
+            if fid then
+              inventory[fid] = inventory[fid] or {}
+              table.insert(inventory[fid], rec)
+            end
+          else
+            owner.equip = rec
+          end
+        else
+          -- 미장착: 세력 군주 장비고에 적재(선물 대상).
+          local fid = owner.faction
+          if fid then
+            inventory[fid] = inventory[fid] or {}
+            table.insert(inventory[fid], rec)
+          end
+        end
       end
     end
   end
+
   return inventory
+end
+
+--- 초기 장비 배분 결과의 정합성을 검증한다 (GDD 8장).
+--
+-- 검증 항목:
+--   ① 동일 장비가 둘 이상의 장수에게 장착(1장비 1장수 원칙 위반).
+--   ② 동일 장비가 장착 슬롯 + 세력 장비고에 동시 존재.
+--   ③ 동일 장비가 두 세력 장비고에 중복.
+--
+-- "왜 검증이 필요한가":
+--   시나리오 데이터를 수동으로 편집할 때 실수로 같은 id 가 두 번 들어갈 수 있다.
+--   런타임에 조용히 통과하면 선물·전투 보너스 계산이 이중으로 들어가는 버그가 된다.
+--
+-- 순수 함수(부작용 없음) → tests/ 에서 직접 호출 가능.
+-- @param officers  table  런타임 장수 배열
+-- @param inventory table  factionInventory (applyInitialEquipment 반환값)
+-- @return boolean ok, table errors  (errors: 위반 목록 문자열 배열)
+function GameState.validateEquipment(officers, inventory)
+  local errors   = {}
+  -- C# Dictionary<string,string> — itemId → 최초 발견 위치(officerId or factionId)
+  local seenEquip = {}  -- 장착 슬롯에서 발견된 아이템 id → officerId
+  local seenInv   = {}  -- 장비고에서 발견된 아이템 id → factionId
+
+  -- ① 장착 슬롯 스캔
+  for _, o in ipairs(officers) do
+    if o.equip then
+      local eid = o.equip.id
+      if seenEquip[eid] then
+        table.insert(errors, string.format(
+          "중복 장착: '%s' 가 '%s', '%s' 둘에게 장착됨", eid, seenEquip[eid], o.id))
+      end
+      seenEquip[eid] = o.id
+    end
+  end
+
+  -- ② ③ 장비고 스캔
+  for fid, inv in pairs(inventory) do
+    for _, rec in ipairs(inv) do
+      local eid = rec.id
+      if seenEquip[eid] then
+        table.insert(errors, string.format(
+          "장착+장비고 중복: '%s' 가 '%s'에 장착됐고 '%s' 장비고에도 있음",
+          eid, seenEquip[eid], fid))
+      end
+      if seenInv[eid] then
+        table.insert(errors, string.format(
+          "장비고 중복: '%s' 가 '%s', '%s' 두 세력 장비고에 있음",
+          eid, seenInv[eid], fid))
+      end
+      seenInv[eid] = fid
+    end
+  end
+
+  return #errors == 0, errors
 end
 
 --- 장비 선물이 가능한지(버튼 활성/실행 전 판정). 순수 함수.
@@ -469,8 +590,9 @@ function GameState.applyGiftEquip(inventory, index, officer)
   return rec
 end
 
--- 포로 동반/처형 귀속(GDD 8·14장)은 이번 범위 밖 → 훅만(미구현).
---   TODO: 포획 시 장비 동반, 처형 시 장비는 군주 장비고로 귀속.
+-- 포로 장비 처리(GDD 8·14장)는 captive.lua 가 담당한다.
+--   · 등용 시: 장비 그대로 장착 유지(processDefeated → attemptRecruit 흐름에서 보존).
+--   · 처형 시: execute(officer, inventory) 가 장비를 군주 장비고(inventory)에 이전.
 
 -- ── 태수 (GDD 5·10·11장) ─────────────────────────────────
 --   지역마다 담당 장수(태수) 1명. 내정·훈련 수행 장수의 기본 후보.
@@ -723,6 +845,38 @@ function GameState.harvestAll(regionState, governors, officers, ownership)
   return total
 end
 
+-- ── 군량 가격 재산정 (GDD 9장) ──────────────────────────────
+--   달이 바뀔 때마다 각 지역 군량 가격을 그 달 [min, max] 범위 안에서 독립 랜덤으로 결정.
+--   지역마다 독립 랜덤 → 같은 달에도 지역별 가격 상이(시장 다양성).
+--   결과는 region.ricePrice 에 저장(정수). popup.lua 가 "금1당 쌀" 슬롯에 그대로 표시.
+
+--- 모든 지역의 군량 가격(금1당 쌀)을 해당 월 범위 내 랜덤으로 재산정한다 (GDD 9장).
+-- 호출 시점:
+--   (1) 시나리오 시작 직후 — startScenario 에서 시작 월 기준 1회.
+--   (2) 매 달 변경 시     — advanceTurn 의 onMonthStart 훅으로.
+-- 계산 공식:
+--   range = rangeTable[month]  (game_data.ricePriceRange 에서)
+--   ricePrice = floor(rng() * (max - min + 1)) + min
+--   → C# Math.Floor(random.NextDouble() * (max-min+1)) + min 와 같은 정수 균등 분포.
+--   → C++ static_cast<int>(rng() * (max-min+1)) + min
+-- 부작용: regionState[*].ricePrice 필드(정수) 덮어쓰기.
+-- @param regionState table  런타임 지역상태 맵
+-- @param month       number  현재 달(1~12)
+-- @param rangeTable  table   game_data.ricePriceRange ([월번호]={min,max})
+-- @param rng         function  [0,1) 실수 반환 난수 함수(love.math.random 또는 시드고정 mock)
+function GameState.updateGrainPrices(regionState, month, rangeTable, rng)
+  local range = rangeTable[month]
+  -- 방어: 달 번호가 범위를 벗어나면(1~12 외) 재산정 건너뜀.
+  --   정상 플레이엔 발생 안 하지만, 단위 테스트에서 잘못된 달을 넘기면 조용히 실패 방지.
+  if not range then return end
+  local minVal, maxVal = range[1], range[2]
+  for _, region in pairs(regionState) do
+    -- pairs(): 맵 전체 순회. C# foreach(KeyValuePair<string, Region>) 와 유사.
+    -- 지역마다 독립 랜덤 호출 → 같은 달이어도 지역별 가격 상이.
+    region.ricePrice = math.floor(rng() * (maxVal - minVal + 1)) + minVal
+  end
+end
+
 -- ── 내정 턴 1회 플래그 리셋 (GDD 10장) ───────────────────
 --   내정 "규칙"(투자/탐색/등용)은 develop.lua 로 분리(game_state 800줄 초과 → 책임 분리).
 --   단, 턴 1회 플래그 리셋은 advanceTurn 이 호출하므로 game_state 가 소유한다(순환 의존 방지).
@@ -768,6 +922,7 @@ end
 -- (금은 지역별 보유 단일 진실원본 — GDD 9장. "군주 소재 금"으로 풀을 찾던
 --  GameState.lordRegionId 는 폐기했다. 금을 쓰는 모든 행동은 그 행동 지역의 금을 쓴다.)
 
+
 -- ── 턴/달력 (GDD 3·9장) ──────────────────────────────────
 --   1턴 = 1개월. 12월 다음은 다음 해 1월.
 --   턴 상태(turn)는 { year, month, count } 테이블로 들고 다닌다(런타임 값).
@@ -796,7 +951,8 @@ end
 --   4. AI 세력 행동 처리            → ctx.onAI       (GDD 16장, 미구현)
 --   5. 날짜 진행: 월 +1, 12월 넘으면 연도 +1·월=1
 --   (5-b) 수확월(7월) 진입 시 수확 훅 → ctx.onHarvest (GDD 9장, 미구현)
---   6. 장수 행동완료 플래그 리셋(어제 작업과 연결) → resetActions
+--   6. 장수 행동완료 플래그 리셋                  → resetActions
+--   7. 게임 종료 검사                             → ctx.onGameEnd (GDD 18장)
 --
 -- "훅(hook)" 패턴: ctx 에 해당 콜백이 있으면 부르고, 없으면 아무 일도 안 한다.
 --   덕분에 호출 순서·시그니처는 지금 확정하고(미완성 인터페이스 먼저 잡기, CLAUDE.md),
@@ -806,7 +962,7 @@ end
 --
 -- 부작용: turn 테이블(year/month/count)을 직접 변경. ctx.officers 의 actionDone 리셋.
 -- @param turn table  GameState.newTurn 으로 만든 턴 상태(직접 변경됨)
--- @param ctx  table|nil  { officers?, regionState?, onTurnEnd?, onArrivals?, onGrowth?, onAI?, onHarvest? }
+-- @param ctx  table|nil  { officers?, regionState?, onTurnEnd?, onArrivals?, onGrowth?, onAI?, onHarvest?, onGameEnd? }
 -- @return table  진행 후의 turn(편의상 반환)
 function GameState.advanceTurn(turn, ctx)
   ctx = ctx or {}
@@ -833,10 +989,23 @@ function GameState.advanceTurn(turn, ctx)
     ctx.onHarvest(turn, ctx)
   end
 
+  -- 5-c. 달 시작 훅 — 모든 달 진입 시 호출(수확 훅과 달리 매달 발동).
+  --   용도: 군량 가격 재산정 등, 달이 바뀔 때마다 필요한 처리.
+  --   왜 5-b 다음인가: 날짜(month)가 확정된 뒤 호출해야 "새 달의 범위"를 올바르게 쓸 수 있다.
+  if ctx.onMonthStart then ctx.onMonthStart(turn, ctx) end
+
   -- 6. 장수 행동완료 리셋 — 새 턴이니 모든 장수가 다시 행동 가능.
   if ctx.officers then GameState.resetActions(ctx.officers) end
   -- 6-b. 내정 턴 1회 플래그(투자/탐색) 리셋 — 빨간 비활성 버튼이 다시 활성으로(GDD 10장).
   if ctx.regionState then GameState.resetRegionActions(ctx.regionState) end
+
+  -- 7. 게임 종료 검사 (GDD 18장) — advanceTurn 단일 호출 지점.
+  --   왜 여기 한 곳에서만: 소유권·장수 상태는 전투·이동 어디서든 바뀔 수 있다.
+  --   분산 검사(exitBattle·이동 등)하면 버그 표면적이 늘어난다.
+  --   단점(의도된 트레이드오프, GDD 18장): 마지막 적 제거 직후가 아닌
+  --   이 훅 발동 후 결과 화면이 뜬다(한 턴 지연).
+  --   ctx.onGameEnd 는 main.lua turnContext 에서 Victory.checkGameEnd 를 감싼다.
+  if ctx.onGameEnd then ctx.onGameEnd(turn, ctx) end
 
   return turn
 end

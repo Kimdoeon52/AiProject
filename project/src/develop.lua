@@ -82,6 +82,28 @@ function Develop.developGain(amount, performer)
   return math.floor(amount * c.perGold * (1 + pol * c.polBonus))
 end
 
+--- 내정 수치를 maxStat(100)까지 올리는 데 필요한 최소 비용 자원량.
+-- developGain 역산: gain = floor(amount * perGold * (1 + pol * polBonus)) >= neededGain
+-- 를 만족하는 최소 amount = ceil(neededGain / efficiency).
+-- 이미 maxStat 이상이면 0을 돌려준다(더 투자할 필요 없음).
+-- 슬라이더 눈금 상한(최대 버튼·가시 범위) 계산에 쓴다 — dev_popup 이 호출.
+-- @param region    table      런타임 지역
+-- @param item      string     투자 항목 키
+-- @param performer table|nil  수행 장수(정치 pol). 없으면 정치 0.
+-- @return number  최소 비용(정수, ≥0)
+function Develop.costToReachMax(region, item, performer)
+  local c = config.develop
+  -- 현재 수치에서 최대까지 남은 상승 여유.
+  local neededGain = c.maxStat - (region[item] or 0)
+  if neededGain <= 0 then return 0 end
+  local pol = performer and performer.pol or 0
+  -- 금 1당 효율(수행 장수 정치 보정 포함) — GDD 10장 공식과 동일 계수.
+  local efficiency = c.perGold * (1 + pol * c.polBonus)
+  -- ceil 로 올림해 floor(amount*efficiency) >= neededGain 보장.
+  -- C# 의 Math.Ceiling() / C++ 의 std::ceil() 과 동일 의미.
+  return math.ceil(neededGain / efficiency)
+end
+
 --- 투자가 가능한지 검사한다(버튼 활성/실행 전 판정). 순수 함수.
 -- 조건: 유효 항목 / 그 지역 그 항목 이번 턴 미투자 / 금액 1 이상 / 비용 자원 충분.
 --   비용 자원은 항목별로 다르다(GDD 10장): 민충성=군량, 나머지=금. region[costField] 로 검사.

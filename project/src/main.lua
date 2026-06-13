@@ -36,6 +36,7 @@ local MapView = require("map_view")
 local Captive = require("captive")
 local CaptivePopup = require("captive_popup")
 local AI = require("ai")
+local Victory = require("victory") -- 게임 종료 조건 판정 (GDD 18장)
 
 -- 모듈 지역 상태 (전역 아님).
 local state = {
@@ -80,6 +81,13 @@ local state = {
   -- 전투(GDD 13장). battle_view.lua 가 읽고/변경한다. draw 는 읽기만.
   battle = nil,        -- 진행 중 전투 상태(Battle.create) — nil 이면 전투 없음
   battleSelId = nil,   -- 전투에서 선택한 유닛 officerId
+  -- 출진 장수 선택(GDD 13장 "장수 단위 출진"). 전쟁 목적지 확정 → Battle.create 전 사이 모달.
+  --   drawMarchSelect 가 읽고, love.mousepressed 가 변경한다. draw 는 읽기만.
+  marchPickOpen = false,   -- 체크리스트 팝업 열림 여부
+  marchFrom = nil,         -- 선택 대기 중 출발지 id
+  marchTo = nil,           -- 선택 대기 중 목적지 id
+  marchDefFaction = nil,   -- 선택 대기 중 방어 세력 id
+  marchSelected = nil,     -- { [officerId]=bool } 체크박스 선택 상태
   -- 포로 처리(GDD 14장). captive_popup.lua 가 읽고/변경. 전투 승리로 포로 생기면 채워짐.
   captivesOpen = false,-- 포로 처리 팝업 열림 여부
   captives = nil,      -- 처리 대기 포로 장수 배열
@@ -90,6 +98,9 @@ local state = {
   factionPending = nil,      -- 군주 선택 중 고른 후보 세력 id(지도 영지 강조 대상)
   menuOpen = false,          -- ESC 게임 메뉴 팝업 열림 여부
   menuExitToMain = false,    -- 메뉴 "메인 화면으로" 요청 플래그(mousepressed 가 리셋 수행)
+  -- 게임 결과(GDD 18장). nil=진행중, "victory"=승리, "defeat"=패배.
+  --   checkEndCondition 이 세팅하면 scene 이 "result" 로 바뀐다.
+  gameResult = nil,
   -- 마우스 누름 상태(지도 화면 전용). 누르면 생기고 떼면 nil.
   press = nil,
 }
@@ -211,6 +222,58 @@ local function drawSelect()
   -- 하단 안내. 화면 바닥에서 60px 위.
   love.graphics.setColor(config.colors.text)
   love.graphics.printf("시나리오를 클릭해 시작", 0, love.graphics.getHeight() - 60, w, "center")
+end
+
+-- ── 결과 화면 (GDD 18장) ─────────────────────────────────
+--   승리·패배 판정 후 scene="result" 로 전환. 여기서 그린다.
+--   흐름: checkEndCondition → state.gameResult 세팅 → scene="result" → drawResult()
+--   → "메인으로" 클릭 → resetToMain().
+--
+--   draw 는 읽기만(state.gameResult 읽음). 입력은 love.mousepressed 에서 처리.
+
+--- 승리/패배 결과 화면을 그린다. (읽기 전용)
+-- 부작용 없음.
+local function drawResult()
+  local w, h = love.graphics.getDimensions()
+
+  -- 전체 화면 어두운 배경(scrim).
+  -- love.graphics.clear(): 배경을 단색으로 지운다.
+  love.graphics.clear(0.06, 0.06, 0.10)
+
+  -- 승리/패배 메시지 + 중앙 박스.
+  local isVictory = (state.gameResult == "victory")
+  local title   = isVictory and "천하통일!" or "패배..."
+  local sub     = isVictory and "모든 지역을 통일했습니다." or "세력이 멸망했습니다."
+  -- 승리: 금색 / 패배: 회색
+  local titleColor = isVictory and {0.95, 0.80, 0.20} or {0.65, 0.65, 0.65}
+
+  -- 중앙 박스(반투명 배경).
+  local bw, bh = 460, 240
+  local bx, by = (w - bw) / 2, (h - bh) / 2
+  love.graphics.setColor(0.12, 0.12, 0.18, 0.96)
+  love.graphics.rectangle("fill", bx, by, bw, bh, 12, 12)
+  love.graphics.setColor(isVictory and {0.80, 0.65, 0.10} or {0.40, 0.40, 0.45})
+  love.graphics.setLineWidth(2)
+  love.graphics.rectangle("line", bx, by, bw, bh, 12, 12)
+
+  -- 제목 텍스트.
+  love.graphics.setFont(state.titleFont)
+  love.graphics.setColor(titleColor)
+  love.graphics.printf(title, bx, by + 40, bw, "center")
+
+  -- 부제 텍스트.
+  love.graphics.setFont(state.font)
+  love.graphics.setColor(0.80, 0.80, 0.85)
+  love.graphics.printf(sub, bx, by + 110, bw, "center")
+
+  -- "메인으로" 버튼.
+  local btnW, btnH = 200, 48
+  local btnX = bx + (bw - btnW) / 2
+  local btnY = by + bh - btnH - 24
+  local mx, my = love.mouse.getPosition()
+  local hovered = mx >= btnX and mx <= btnX + btnW and my >= btnY and my <= btnY + btnH
+  local btn = UI.newButton(btnX, btnY, btnW, btnH, "메인으로", "main")
+  UI.draw(btn, { hovered = hovered, accent = config.colors.selectBorder })
 end
 
 -- ── 지도 화면 ────────────────────────────────────────────
@@ -355,11 +418,33 @@ local function turnContext()
         rng1n = function(n) return love.math.random(n) end, -- 1..n 정수(태수 동률 선정)
       })
     end,
+    -- 달 시작 훅 (GDD 9장): advanceTurn 에서 날짜가 바뀐 직후 발동.
+    --   군량 가격을 새 달의 범위 안에서 지역별로 독립 재산정.
+    --   왜 onGrowth 가 아닌가: onGrowth 는 날짜 진행 전 step 3 에서 발동 → 구 달 기준.
+    --   onMonthStart 는 step 5-c(날짜 확정 뒤) → 새 달 기준으로 정확히 재산정 가능.
+    onMonthStart = function(t)
+      GameState.updateGrainPrices(
+        state.regionState, t.month, game_data.ricePriceRange, state.rng)
+      print(string.format("[가격] %d년 %d월 군량 가격 재산정", t.year, t.month))
+    end,
+    -- 게임 종료 검사 (GDD 18장): advanceTurn 단일 지점에서 발동.
+    --   Victory.checkGameEnd(소유맵, 플레이어세력, 장수목록, 지역목록) → "victory"/"defeat"/nil.
+    --   결과 있으면 state.gameResult + state.scene = "result" 로 전환.
+    --   한 턴 지연: exitBattle 직후가 아닌 다음 turnContext 호출 시 판정(의도된 단순화).
+    onGameEnd = function()
+      local result = Victory.checkGameEnd(
+        ownership, state.playerFactionId, state.officers, state.regions)
+      if result then
+        state.gameResult = result
+        state.scene     = "result"
+      end
+    end,
   }
 end
 
 --- 턴을 한 칸 진행한다(버튼 클릭 시). 규칙은 game_state 가 담당.
 -- 부작용: state.turn(연/월/카운트) 변경, 장수 행동완료 리셋.
+--   승패 검사는 turnContext().onGameEnd 훅 → advanceTurn 내부에서 발동(GDD 18장).
 local function advanceGameTurn()
   GameState.advanceTurn(state.turn, turnContext())
 end
@@ -461,6 +546,99 @@ local function drawPanel()
   UI.draw(btn, { hovered = UI.hit(btn, mx, my), accent = config.colors.selectBorder })
 end
 
+--- 출진 장수 선택 팝업을 그린다 (GDD 13장). 체크박스 + 선택 합계 + 확정/취소 버튼. (읽기 전용)
+-- 전쟁 목적지 확정 후 Battle.create 호출 전 사이에 표시되는 모달.
+--   · 장수 단위 출진(병력 분할 없음): 선택 장수의 병력 전부 함께 출전.
+--   · 최소 1명 선택해야 확정 버튼 활성화(0명 선택 시 비활성).
+--   · 잔류 장수(미선택)는 출발지에 병력째 남아 수비 가능.
+local function drawMarchSelect()
+  -- love.graphics.getDimensions(): 현재 창 크기(px). C# Screen.width/height 와 유사.
+  local sw, sh = love.graphics.getDimensions()
+
+  -- 반투명 scrim(어두운 배경) — love.graphics.setColor: R,G,B,A 각 0~1.
+  love.graphics.setColor(0, 0, 0, 0.55)
+  love.graphics.rectangle("fill", 0, 0, sw, sh)
+
+  -- 팝업 박스 크기/위치(중앙 정렬)
+  local bw, bh = 430, 520
+  local bx = (sw - bw) / 2
+  local by = (sh - bh) / 2
+
+  -- 팝업 배경 + 테두리
+  love.graphics.setColor(0.12, 0.13, 0.18, 1)
+  love.graphics.rectangle("fill", bx, by, bw, bh, 8)
+  love.graphics.setColor(0.7, 0.6, 0.25, 1)
+  -- love.graphics.rectangle("line", ...): 채움이 아닌 외곽선 사각형.
+  love.graphics.rectangle("line", bx, by, bw, bh, 8)
+
+  -- 제목 + 구분선
+  love.graphics.setColor(0.95, 0.9, 0.7, 1)
+  love.graphics.print("출진 장수 선택 (GDD 13장)", bx + 16, by + 14)
+  love.graphics.setColor(0.45, 0.45, 0.45, 1)
+  love.graphics.line(bx + 16, by + 37, bx + bw - 16, by + 37)
+
+  -- 출진 가능 장수 목록(체크박스 + 이름/무력/병력)
+  -- Battle.marchers: active + 병력>0 로 필터된 장수만 표시.
+  local marchers = Battle.marchers(state.officers, state.marchFrom, state.playerFactionId)
+  local rowH = 38
+  local listY = by + 46
+  for i, o in ipairs(marchers) do
+    local ry = listY + (i - 1) * rowH
+    local sel = state.marchSelected and state.marchSelected[o.id]
+
+    -- 체크박스 사각형: 선택=녹색, 미선택=회색
+    love.graphics.setColor(sel and {0.18, 0.65, 0.25, 1} or {0.28, 0.28, 0.33, 1})
+    love.graphics.rectangle("fill", bx + 16, ry + 9, 20, 20, 3)
+    -- 체크 표시 "v" (선택 시)
+    if sel then
+      love.graphics.setColor(1, 1, 1, 1)
+      love.graphics.print("v", bx + 20, ry + 9)
+    end
+
+    -- 이름 · 유효무력(장비 보너스 포함, GDD 8장) · 병력
+    -- GameState.effectiveStat(o, "might"): 기본무력 + 장착 장비 보너스(있으면).
+    local might = GameState.effectiveStat(o, "might")
+    love.graphics.setColor(sel and {1, 1, 1, 1} or {0.6, 0.6, 0.6, 1})
+    love.graphics.print(
+      string.format("%-8s  무력 %2d  병력 %d", o.name, might, o.troops or 0),
+      bx + 44, ry + 11)
+  end
+
+  -- 합계 미리보기: 선택 장수 수 + 총 병력
+  local selCount, selTroops = 0, 0
+  if state.marchSelected then
+    -- pairs(): C# foreach over Dictionary / C++ range-based for over unordered_map.
+    for oid, sel in pairs(state.marchSelected) do
+      if sel then
+        selCount = selCount + 1
+        local o = GameState.byId(state.officers, oid)
+        if o then selTroops = selTroops + (o.troops or 0) end
+      end
+    end
+  end
+  local sumY = listY + #marchers * rowH + 8
+  love.graphics.setColor(0.85, 0.85, 0.45, 1)
+  love.graphics.print(string.format("출진: %d명  총 병력 %d", selCount, selTroops), bx + 16, sumY)
+
+  -- 확정 버튼(selCount>0 이면 녹색·활성, 0이면 회색·비활성) + 취소 버튼
+  local btnW, btnH = 150, 40
+  local confirmX = bx + bw - btnW * 2 - 24
+  local cancelX  = bx + bw - btnW - 12
+  local btnY = by + bh - btnH - 14
+
+  -- 확정: 1명 이상 선택해야 전투 진입 가능
+  love.graphics.setColor(selCount > 0 and {0.15, 0.52, 0.2, 1} or {0.3, 0.3, 0.3, 1})
+  love.graphics.rectangle("fill", confirmX, btnY, btnW, btnH, 6)
+  love.graphics.setColor(selCount > 0 and {1, 1, 1, 1} or {0.5, 0.5, 0.5, 1})
+  love.graphics.print("확정", confirmX + btnW / 2 - 14, btnY + 11)
+
+  -- 취소: 항상 활성(부대 명령 팝업으로 복귀)
+  love.graphics.setColor(0.52, 0.15, 0.15, 1)
+  love.graphics.rectangle("fill", cancelX, btnY, btnW, btnH, 6)
+  love.graphics.setColor(1, 1, 1, 1)
+  love.graphics.print("취소", cancelX + btnW / 2 - 14, btnY + 11)
+end
+
 --- 지도 화면을 그린다. (읽기 전용)
 -- 카메라 변환(scale→translate) 안에서 헥스 지도 → 변환 밖에서 화면 고정 오버레이
 -- (시나리오/선택 정보 + 세력 범례).
@@ -497,6 +675,8 @@ local function drawMap()
     love.graphics.setColor(config.colors.selectBorder)
     love.graphics.printf("목적지 지역을 클릭하세요  (Esc 취소)", 0, 70, sw, "center")
   end
+  -- 출진 장수 선택 팝업(GDD 13장): 전쟁 확정 후 Battle.create 전 사이 모달.
+  if state.marchPickOpen then drawMarchSelect() end
   -- 흐름 오버레이(군주 선택 / ESC 메뉴)는 최상단 모달로 덮어 그린다.
   Overlay.draw(state)
 end
@@ -509,6 +689,8 @@ function love.draw()
   love.graphics.setFont(state.font)
   if state.scene == "select" then
     drawSelect()
+  elseif state.scene == "result" then
+    drawResult()   -- 승리/패배 결과 화면(GDD 18장)
   elseif state.scene == "battle" then
     BattleView.draw(state) -- 전투 씬(GDD 13장) — 그리드 전술 전투
   else
@@ -525,10 +707,12 @@ end
 local function rng(n) return love.math.random(n) end
 
 local function startScenario(idx)
-  state.scenario = game_data.scenarios[idx]
+  -- local sc: state.scenario 는 nil 로 선언돼 LSP 타입 추론 불가 → local 로 꺼내 쓴다.
+  local sc = game_data.scenarios[idx]
+  state.scenario = sc
   state.selectedId = nil
   -- 턴 상태(시작 연/월) + 런타임 장수 구성.
-  state.turn = GameState.newTurn(state.scenario)
+  state.turn = GameState.newTurn(sc)
   state.officers = GameState.buildOfficers(game_data, state.scenario)
   -- 소유↔배치 정합성 정규화(GDD 6장): active 0명 소유 지역은 중립으로 강등한 "복사본"을 쓴다.
   --   game_data 원본 불변 — 런타임 소유는 state.ownership 가 진실원본이 된다.
@@ -544,6 +728,11 @@ local function startScenario(idx)
   --   정규화 뒤에 태수를 뽑으므로, 중립 강등된 빈 지역은 assignGovernor 가 nil 반환(태수 자동 해제).
   state.factionInventory = GameState.applyInitialEquipment(game_data, state.scenario, state.officers)
   state.governors = GameState.assignGovernors(state.regions, state.officers, rng)
+  -- 시나리오 시작 월 기준 군량 가격 1회 초기 산정 (GDD 9장).
+  --   advanceTurn onMonthStart 가 매달 재산정하지만, 첫 턴 전까지 패널에 "—" 가 뜨지 않도록
+  --   여기서 먼저 한 번 설정. startMonth(없으면 1월)를 직접 참조(state.turn 초기값 nil 타입 경고 방지).
+  GameState.updateGrainPrices(
+    state.regionState, sc.startMonth or 1, game_data.ricePriceRange, state.rng)
   -- 지도 씬으로 진입하되, 군주(세력) 선택 팝업을 띄운다(GDD 3장 흐름 2번 — 지도 보며 영지 확인).
   --   확정 전까지 playerFactionId 는 nil. overlay 가 확정 시 설정한다.
   state.playerFactionId = nil
@@ -556,6 +745,9 @@ local function startScenario(idx)
   -- 전투(GDD 13장)·포로(GDD 14장) 초기화.
   state.battle, state.battleSelId = nil, nil
   state.captivesOpen, state.captives, state.captiveRegion = false, nil, nil
+  -- 출진 장수 선택 팝업 초기화(GDD 13장).
+  state.marchPickOpen = false
+  state.marchFrom, state.marchTo, state.marchDefFaction, state.marchSelected = nil, nil, nil, nil
   state.scene = "map"
   refitCamera() -- 지도 진입 시 fit/중앙 맞춤
 end
@@ -564,6 +756,7 @@ end
 -- 부작용: 진행 상태/플래그 초기화 + 씬 전환.
 local function resetToMain()
   state.scene = "select"
+  state.gameResult = nil  -- 결과 초기화(다음 게임에 잔재 안 남게)
   state.playerFactionId = nil
   state.factionSelectOpen = false
   state.factionPending = nil
@@ -578,6 +771,8 @@ local function resetToMain()
   state.orderKind, state.orderOfficerId, state.orderGrain = Movement.ORDER.move, nil, 0
   state.battle, state.battleSelId = nil, nil
   state.captivesOpen, state.captives, state.captiveRegion = false, nil, nil
+  state.marchPickOpen = false
+  state.marchFrom, state.marchTo, state.marchDefFaction, state.marchSelected = nil, nil, nil, nil
   state.press = nil
 end
 
@@ -604,6 +799,8 @@ local function exitBattle()
   end
   state.battle = nil
   state.battleSelId = nil
+  -- 승패 검사는 advanceTurn(onGameEnd 훅) 단일 지점에서만.
+  --   한 턴 지연: 이 전투 결과는 다음 advanceTurn 에서 판정됨(의도된 단순화, GDD 18장).
   state.scene = "map"
 end
 
@@ -618,15 +815,26 @@ local function confirmOrder(toId)
   -- 인접 판정 함수 주입(movement/battle 은 지도/좌표를 모름 — region.lua 를 main 이 끼워준다).
   local isAdjacent = function(a, b) return Region.areAdjacent(state.regions, a, b) end
 
-  -- 전쟁(GDD 13장): 인접 적 지역 검증 후 즉시 전투 씬 진입(즉시 전투 — GDD 정정).
+  -- 전쟁(GDD 13장): 인접 적 지역 검증 후 출진 장수 선택 팝업 진입.
+  --   장수 단위 출진: 플레이어가 출발지 장수 중 1명 이상을 체크박스로 선택 → Battle.create 에 주입.
   if kind == OrderPopup.WAR then
     local ok, reason = Battle.canDeclareWar(state.ownership, state.officers,
       fromId, toId, state.playerFactionId, isAdjacent)
     if ok then
       local defFaction = state.ownership[toId]
-      state.battle = Battle.create(state.officers, fromId, toId, state.playerFactionId, defFaction)
-      state.battleSelId = nil
-      state.scene = "battle"
+      -- 출발지 active 장수 목록을 확정해 선택 팝업 상태에 저장.
+      -- Battle.marchers: active + 병력>0 필터(유닛이 될 수 있는 장수만).
+      local marchers = Battle.marchers(state.officers, fromId, state.playerFactionId)
+      -- 선택 초기화: 전원 미선택(false) 상태로 시작. 플레이어가 직접 체크.
+      -- Lua table: C# Dictionary<string,bool> / C++ std::unordered_map<string,bool> 과 동일.
+      local mSel = {}
+      for _, o in ipairs(marchers) do mSel[o.id] = false end
+      state.marchPickOpen = true
+      state.marchFrom = fromId
+      state.marchTo = toId
+      state.marchDefFaction = defFaction
+      state.marchSelected = mSel
+      state.orderPicking = false  -- 목적지 선택 모드 종료
       state.notice = nil
     else
       state.orderOpen = true; state.notice = reason or "공격 불가"
@@ -671,6 +879,20 @@ end
 function love.mousepressed(x, y, button)
   if button ~= 1 then return end
 
+  -- 결과 화면(GDD 18장): "메인으로" 버튼 클릭만 처리.
+  if state.scene == "result" then
+    local w, h = love.graphics.getDimensions()
+    local bw, bh = 460, 240
+    local bx, by = (w - bw) / 2, (h - bh) / 2
+    local btnW, btnH = 200, 48
+    local btnX = bx + (bw - btnW) / 2
+    local btnY = by + bh - btnH - 24
+    if x >= btnX and x <= btnX + btnW and y >= btnY and y <= btnY + btnH then
+      resetToMain()
+    end
+    return
+  end
+
   -- 전투 씬(GDD 13장): 입력은 battle_view 가 처리. 결과 확인 클릭이면 resolve + 맵 복귀.
   if state.scene == "battle" then
     if BattleView.mousepressed(state, x, y) then exitBattle() end
@@ -686,6 +908,69 @@ function love.mousepressed(x, y, button)
       end
     end
     return
+  end
+
+  -- 출진 장수 선택 팝업(GDD 13장): 최우선 모달 — 열려 있으면 다른 입력 차단.
+  if state.marchPickOpen then
+    local sw, sh = love.graphics.getDimensions()
+    local bw, bh = 430, 520
+    local bx = (sw - bw) / 2
+    local by = (sh - bh) / 2
+    local marchers = Battle.marchers(state.officers, state.marchFrom, state.playerFactionId)
+    local rowH = 38
+    local listY = by + 46
+
+    -- 체크박스 행 클릭: 해당 장수 선택 토글(false→true, true→false).
+    -- Lua not: C# ! 연산자와 동일(불리언 반전).
+    for i, o in ipairs(marchers) do
+      local ry = listY + (i - 1) * rowH
+      if x >= bx + 16 and x <= bx + bw - 16 and y >= ry and y <= ry + rowH then
+        state.marchSelected[o.id] = not state.marchSelected[o.id]
+        return
+      end
+    end
+
+    -- 확정/취소 버튼
+    local btnW, btnH = 150, 40
+    local confirmX = bx + bw - btnW * 2 - 24
+    local cancelX  = bx + bw - btnW - 12
+    local btnY = by + bh - btnH - 14
+
+    -- 선택 장수 수 집계 + 선택 목록 구성
+    local selCount = 0
+    local atkList = {}
+    for _, o in ipairs(marchers) do
+      if state.marchSelected[o.id] then
+        selCount = selCount + 1
+        atkList[#atkList + 1] = o
+      end
+    end
+
+    if x >= confirmX and x <= confirmX + btnW and y >= btnY and y <= btnY + btnH then
+      -- 확정: 최소 1명 선택 필수(0명이면 버튼 비활성 → 클릭 무시).
+      if selCount > 0 then
+        -- 선택된 장수만 유닛으로 생성(atkList 주입). 잔류 장수는 fromId 유지(GDD 13장).
+        state.battle = Battle.create(state.officers, state.marchFrom, state.marchTo,
+          state.playerFactionId, state.marchDefFaction, atkList)
+        state.battleSelId = nil
+        state.scene = "battle"
+        state.marchPickOpen = false
+        state.marchFrom, state.marchTo, state.marchDefFaction, state.marchSelected = nil, nil, nil, nil
+        state.notice = nil
+      end
+      return
+    end
+
+    if x >= cancelX and x <= cancelX + btnW and y >= btnY and y <= btnY + btnH then
+      -- 취소: 장수 선택 취소 → 부대 명령 팝업으로 복귀.
+      state.marchPickOpen = false
+      state.marchFrom, state.marchTo, state.marchDefFaction, state.marchSelected = nil, nil, nil, nil
+      state.notice = nil
+      state.orderOpen = true  -- 부대 명령 팝업 다시 열기(GDD 12장)
+      return
+    end
+
+    return  -- 팝업 외부 클릭 무시(모달)
   end
 
   -- 목적지 선택 모드(GDD 12장): 버튼/팝업 판정을 건너뛰고 누름만 기록한다.
@@ -821,6 +1106,12 @@ function love.keypressed(key)
     elseif state.factionSelectOpen then
       -- 아직 게임 시작 전(군주 미확정) → 시나리오 선택으로 되돌림.
       resetToMain()
+    elseif state.marchPickOpen then
+      -- 출진 장수 선택 취소(GDD 13장) → 부대 명령 팝업으로 복귀.
+      state.marchPickOpen = false
+      state.marchFrom, state.marchTo, state.marchDefFaction, state.marchSelected = nil, nil, nil, nil
+      state.notice = nil
+      state.orderOpen = true
     elseif state.orderPicking then
       state.orderPicking = false; state.notice = nil -- 목적지 선택 취소(GDD 12장)
     elseif state.orderOpen then

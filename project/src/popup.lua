@@ -548,10 +548,14 @@ local function drawRegionInfo(state, px, py, pw, ph)
   line("재야 장수", freeN .. "명")
   y = y + 6
 
-  -- 금 / 군량 / 금1당 쌀(월별 군량가 — GDD 9장, 매입/판매 미구현 → 추후).
+  -- 금 / 군량 / 금1당 쌀(월별 군량가 — GDD 9장).
+  --   ricePrice: GameState.updateGrainPrices 가 달 시작마다 지역별 독립 랜덤 재산정.
+  --             값이 클수록 저렴(금 1로 많이 삼), 작을수록 비쌈.
+  --   nil 방어: 시나리오 로드 직후 updateGrainPrices 가 바로 호출되므로 정상 시 nil 없음.
+  --             단 만약 nil 이면 "—" 로 표시(방어용).
   line("금", region.gold)
   line("군량", region.grain)
-  line("금1당 쌀", "— (추후)")
+  line("금1당 쌀", region.ricePrice or "—")
   y = y + 6
 
   -- 내부 수치(민충성/토지가치/상업/치수).

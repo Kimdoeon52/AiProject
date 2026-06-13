@@ -124,9 +124,35 @@ local function aiCaptureHandler(ctx, fid)
   end
 end
 
---- 적/플레이어 지역 공격: 자동 전투 해결 + 결과 반영(소유권/포로). (GDD 13·16장)
+--- 적/플레이어 지역 공격: AI 최소 1명 수비 잔류 후 자동 전투 해결 + 결과 반영. (GDD 13·16장)
+--
+-- AI 출진 규칙(GDD 13장): 출발지에 항상 ≥1명을 남겨 과확장 방지.
+--   · active 장수 N명 → 최대 N-1명 출진.
+--   · 1명뿐이면 출진 포기(이 지역에서 공격 안 함) → false 반환.
+--
+-- C# 비교: 이 함수 = bool TryAttack(...) { if (!canLaunch) return false; ... return true; }
+-- @return boolean  출진 성공 여부(false = 1명만 있어 포기)
 local function tryAttack(ctx, regionId, fid, target)
-  local battle = Battle.autoBattle(ctx.officers, regionId, target.id, fid, target.owner, ctx.rng)
+  -- Battle.marchers: active + 병력>0 필터 — 출진 가능 장수 전체.
+  local allMarchers = Battle.marchers(ctx.officers, regionId, fid)
+  -- 1명뿐이면 출진 시 출발지가 비어 중립 강등 → 과확장. 포기.
+  if #allMarchers <= 1 then return false end
+
+  -- 출진 장수: 무력(effectiveStat "might" = 기본 무력 + 장비 보너스, GDD 8·13장) 내림차순 정렬.
+  -- 상위 N-1명 출진, 최하위 1명은 수비 잔류.
+  -- 정교한 전술 판단(진형·집중공격 등)은 스코프 락 — 단순 무력순만.
+  -- table.sort: C# List.Sort() / C++ std::sort() 와 동일. 비교 함수(comparator) 방식.
+  table.sort(allMarchers, function(a, b)
+    return (GameState.effectiveStat(a, "might") or 0) > (GameState.effectiveStat(b, "might") or 0)
+  end)
+  local atkList = {}
+  for i = 1, #allMarchers - 1 do
+    atkList[#atkList + 1] = allMarchers[i]
+  end
+
+  -- atkList 를 Battle.autoBattle 에 주입 → N-1명만 유닛으로 전투 참여.
+  -- 잔류 1명(atkList 에 없는 장수)은 유닛 미생성 → 전투 후에도 fromId 유지(GDD 13장).
+  local battle = Battle.autoBattle(ctx.officers, regionId, target.id, fid, target.owner, ctx.rng, atkList)
   Battle.resolve(battle, ctx.officers, ctx.ownership, ctx.governors, ctx.rng1n, aiCaptureHandler(ctx, fid))
   return true
 end
@@ -144,8 +170,9 @@ local function actRegion(ctx, regionId, fid)
       if tryOccupy(ctx, regionId, fid, target) then return end
       -- 점령 보류(여분 없음)면 아래 내정으로 진행.
     else
-      tryAttack(ctx, regionId, fid, target)
-      return
+      -- 공격: 최소 1명 잔류 규칙으로 포기(1명뿐)면 내정으로 진행.
+      -- C# 비교: if (TryAttack(...)) return; else { ... 내정 ... }
+      if tryAttack(ctx, regionId, fid, target) then return end
     end
   end
 

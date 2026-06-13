@@ -215,8 +215,15 @@ local function drawInvest(state, px, py, pw, ph)
   local costField = Develop.investCostField(item)
   local costLabel = Develop.costLabel(item)
   local maxCost = region[costField]
-  local amount = clampAmount(state.investAmount, maxCost)
+  -- 수행 장수를 먼저 결정해야 costToReachMax 계산에 정치 반영 가능.
   local performer = performerOf(state, regionId(state))
+  -- 슬라이더 눈금 상한: 수치를 100까지 올리는 데 필요한 최소 비용(performer 정치 반영).
+  -- 이 값이 슬라이더 오른쪽 끝(= 내정 수치 100이 되는 지점)이 된다.
+  local costToMax = Develop.costToReachMax(region, item, performer)
+  -- 실제 투자 가능 상한: 100 목표 비용과 보유 자원 중 작은 값.
+  -- 금이 부족하면 목표까지 투자할 수 없으므로 보유 자원으로 제한.
+  local effectiveMax = math.min(costToMax, maxCost)
+  local amount = clampAmount(state.investAmount, effectiveMax)
 
   love.graphics.setColor(config.colors.text)
   love.graphics.print(region.name .. " — " .. (ITEM_LABEL[item] or item) .. " 투자", x, y)
@@ -242,7 +249,9 @@ local function drawInvest(state, px, py, pw, ph)
     B.track.x, B.track.y - 26, B.track.w, "right")
 
   -- 슬라이더 트랙: 배경 → 채운 비율 → 핸들.
-  local ratio = maxCost > 0 and (amount / maxCost) or 0
+  -- 비율은 costToMax 기준: 슬라이더 오른쪽 끝 = 수치 100 도달점.
+  -- 금이 부족하면 thumb 이 오른쪽 끝까지 못 간다(effectiveMax < costToMax 이므로).
+  local ratio = costToMax > 0 and (amount / costToMax) or 0
   love.graphics.setColor(0.20, 0.21, 0.25)
   love.graphics.rectangle("fill", B.track.x, B.track.y, B.track.w, B.track.h, 6, 6)
   love.graphics.setColor(config.colors.selectBorder)
@@ -399,28 +408,36 @@ local function clickInvest(state, x, y, px, py, pw, ph)
   local region = curRegion(state)
   if not region then state.devItem = nil; return end
   local item = state.devItem
-  -- 비용 자원(민충성=군량/그 외=금) 보유량을 슬라이더 한도로(GDD 10장).
+  -- 비용 자원(민충성=군량/그 외=금) 보유량.
   local maxCost = region[Develop.investCostField(item)]
+  -- draw 와 동일 계산: performer 정치를 반영한 100 목표 비용 → 실제 상한.
+  local performer = performerOf(state, regionId(state))
+  local costToMax = Develop.costToReachMax(region, item, performer)
+  local effectiveMax = math.min(costToMax, maxCost)
   local B = investLayout(state, px, py, pw, ph)
 
   if UI.hit(B.close, x, y) then
     state.devItem = nil; state.notice = nil; return -- 허브로
   end
-  -- 슬라이더 트랙 클릭 → 클릭 위치 비율로 투자금 설정(0~지역 금).
+  -- 슬라이더 트랙 클릭 → 클릭 위치 비율(costToMax 기준)로 투자금 설정.
+  -- costToMax 가 슬라이더 오른쪽 끝이므로 ratio * costToMax 로 역산.
+  -- 금 부족이면 effectiveMax 로 클램프 → 오른쪽 끝까지 이동 불가.
   if x >= B.track.x and x <= B.track.x + B.track.w
      and y >= B.track.y - 12 and y <= B.track.y + B.track.h + 12 then
     local ratio = (x - B.track.x) / B.track.w
-    state.investAmount = clampAmount(ratio * maxCost, maxCost)
+    state.investAmount = clampAmount(ratio * costToMax, effectiveMax)
     return
   end
   if UI.hit(B.minus, x, y) then
-    state.investAmount = clampAmount(clampAmount(state.investAmount, maxCost) - config.develop.sliderStep, maxCost); return
+    state.investAmount = clampAmount(clampAmount(state.investAmount, effectiveMax) - config.develop.sliderStep, effectiveMax); return
   end
   if UI.hit(B.plus, x, y) then
-    state.investAmount = clampAmount(clampAmount(state.investAmount, maxCost) + config.develop.sliderStep, maxCost); return
+    state.investAmount = clampAmount(clampAmount(state.investAmount, effectiveMax) + config.develop.sliderStep, effectiveMax); return
   end
   if UI.hit(B.max, x, y) then
-    state.investAmount = maxCost; return
+    -- 최대 버튼: 수치 100 도달 비용(effectiveMax) 으로 설정.
+    -- 금이 부족하면 effectiveMax < costToMax 이므로 오른쪽 끝까지는 못 감.
+    state.investAmount = effectiveMax; return
   end
   -- 수행 장수 선택(투자 효율은 이 장수 정치 반영).
   for _, r in ipairs(B.performers) do
@@ -428,8 +445,7 @@ local function clickInvest(state, x, y, px, py, pw, ph)
   end
   -- 확정 → 투자 실행(규칙은 game_state). 성공 시 허브로 복귀(빨간 비활성 확인).
   if UI.hit(B.confirm, x, y) then
-    local performer = performerOf(state, regionId(state))
-    local amount = clampAmount(state.investAmount, maxCost)
+    local amount = clampAmount(state.investAmount, effectiveMax)
     local actOk = performer and GameState.canAct(performer)
     local ok, reason = Develop.canInvest(region, item, amount)
     if actOk and ok then
@@ -495,7 +511,7 @@ local function clickHub(state, x, y, px, py, pw, ph)
       state.devItem = item.key
       state.notice = nil
       state.devPerformerId = nil          -- 기본 수행 장수(태수)로 초기화
-      state.investAmount = math.min(100, region.gold) -- 슬라이더 기본값(소액)
+      state.investAmount = 0 -- 열 때 0 시작. 최대 버튼으로 한 번에 채울 수 있다.
       return
     end
   end
